@@ -203,17 +203,17 @@ static inline void *nccl_ofi_freelist_entry_alloc(nccl_ofi_freelist_t *freelist)
 		return NULL;
 	}
 
-	if (!freelist->entries) {
-		ret = nccl_ofi_freelist_add(freelist, freelist->increase_entry_count);
-		if (ret != 0) {
-			NCCL_OFI_WARN("Could not extend freelist: %d", ret);
-			goto cleanup;
-		}
-	}
+	buf = malloc(freelist->entry_size);
+	assert(buf);
 
-	entry = freelist->entries;
-	freelist->entries = entry->next;
-	buf = entry->ptr;
+	if (freelist->have_reginfo) {
+		assert(freelist->reginfo_offset == 0);
+		nccl_ofi_freelist_reginfo_t *reginfo = buf;
+		char *reg_buff = ((char*)buf) + sizeof(nccl_ofi_freelist_reginfo_t);
+		size_t reg_size = freelist->entry_size - sizeof(nccl_ofi_freelist_reginfo_t);
+		int r = freelist->regmr_fn(freelist->regmr_opaque, reg_buff, reg_size, &reginfo->mr_handle);
+		assert(r == 0);
+	}
 
 cleanup:
 	ret = pthread_mutex_unlock(&freelist->lock);
@@ -247,14 +247,13 @@ static inline void nccl_ofi_freelist_entry_free(nccl_ofi_freelist_t *freelist, v
 	}
 
 	if (freelist->have_reginfo) {
-		entry = (struct nccl_ofi_freelist_elem_t *)((char*)entry_p + freelist->reginfo_offset);
-	} else {
-		entry = (struct nccl_ofi_freelist_elem_t *)entry_p;
-		entry->ptr = (void *)entry;
+		assert(freelist->reginfo_offset == 0);
+		nccl_ofi_freelist_reginfo_t *reginfo = entry_p;
+		int r = freelist->deregmr_fn(reginfo->mr_handle);
+		assert(r == 0);
 	}
 
-	entry->next = freelist->entries;
-	freelist->entries = entry;
+	free(entry_p);
 
 	ret = pthread_mutex_unlock(&freelist->lock);
 	if (ret != 0) {

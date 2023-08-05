@@ -52,15 +52,6 @@ static int freelist_init_internal(size_t entry_size,
 		return ncclSystemError;
 	}
 
-	ret = nccl_ofi_freelist_add(freelist, initial_entry_count);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Allocating initial freelist entries failed: %d", ret);
-		pthread_mutex_destroy(&freelist->lock);
-		free(freelist);
-		return ret;
-
-	}
-
 	*freelist_p = freelist;
 	return 0;
 }
@@ -111,25 +102,6 @@ int nccl_ofi_freelist_fini(nccl_ofi_freelist_t *freelist)
 
 	assert(freelist);
 
-	while (freelist->blocks) {
-		struct nccl_ofi_freelist_block_t *block = freelist->blocks;
-		freelist->blocks = block->next;
-
-		/* note: the base of the allocation and the memory
-		   pointer are the same (that is, the block structure
-		   itself is located at the end of the allocation.  See
-		   note in freelist_add for reasoning */
-		if (freelist->deregmr_fn) {
-			ret = freelist->deregmr_fn(block->mr_handle);
-			if (ret != 0) {
-				NCCL_OFI_WARN("Could not deregister freelist buffer %p with handle %p",
-					      block->memory, block->mr_handle);
-			}
-		}
-
-		free(block->memory);
-	}
-
 	freelist->entry_size = 0;
 	freelist->entries = NULL;
 
@@ -143,6 +115,7 @@ int nccl_ofi_freelist_fini(nccl_ofi_freelist_t *freelist)
 int nccl_ofi_freelist_add(nccl_ofi_freelist_t *freelist,
 			  size_t num_entries)
 {
+	abort();
 	int ret;
 	size_t allocation_count = num_entries;
 	char *buffer;

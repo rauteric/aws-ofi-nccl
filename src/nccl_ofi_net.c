@@ -417,6 +417,7 @@ static void filter_tcp_info_list(struct fi_info **info_list, int *num_infos)
  */
 static void get_hints(struct fi_info *hints, int req_gdr)
 {
+	req_gdr = 0;
 	if (req_gdr) {
 		hints->caps = FI_TAGGED | FI_MSG | FI_HMEM | FI_REMOTE_COMM;
 		if (!cuda_flush)
@@ -443,7 +444,8 @@ static void get_hints(struct fi_info *hints, int req_gdr)
 	 * - FI_DIRECTED_RECV - support fi_trecv from specific endpoint
 	 * - FI_RMA and family - support RMA operations
 	 */
-	hints->caps |= FI_DIRECTED_RECV | FI_RMA | FI_WRITE | FI_REMOTE_WRITE;
+	//hints->caps |= FI_DIRECTED_RECV | FI_RMA | FI_WRITE | FI_REMOTE_WRITE;
+	hints->caps |= FI_DIRECTED_RECV;
 
 	hints->mode = FI_CONTEXT;
 
@@ -507,7 +509,7 @@ static int find_ofi_provider(struct fi_info **providers)
 		 * until we create an endpoint and try to disable
 		 * CUDA
 		 */
-		support_gdr = GDR_UNKNOWN;
+		support_gdr = GDR_UNSUPPORTED;
 		selected_fi_version = FI_VERSION(1, 18);
 		goto exit;
 	}
@@ -516,7 +518,7 @@ static int find_ofi_provider(struct fi_info **providers)
 	if (rc == 0) {
 		NCCL_OFI_TRACE(NCCL_INIT | NCCL_NET,
 			       "Using Libfabric 1.6 API, with GPUDirect RDMA support");
-		support_gdr = GDR_SUPPORTED;
+		support_gdr = GDR_UNSUPPORTED;
 		selected_fi_version = FI_VERSION(1, 6);
 		goto exit;
 	}
@@ -1012,6 +1014,7 @@ ncclResult_t nccl_net_ofi_init(ncclDebugLogger_t logFunction)
 	} else {
 		NCCL_OFI_TRACE(NCCL_INIT | NCCL_NET, "Provider %s does not use remote virtual addressing",
 			       ofi_info_list->fabric_attr->prov_name);
+		virt_addr_mr = true;
 	}
 
 	/* Indicates if the provider selects MR keys */

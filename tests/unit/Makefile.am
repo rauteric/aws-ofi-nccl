@@ -7,6 +7,8 @@
 AM_CPPFLAGS = -I$(top_srcdir)/include
 LDADD = $(top_builddir)/src/libnccl-net.la
 
+
+if ENABLE_TESTS
 noinst_HEADERS = test-common.h
 
 noinst_PROGRAMS = \
@@ -16,7 +18,7 @@ noinst_PROGRAMS = \
 	scheduler
 
 TESTS = $(noinst_PROGRAMS)
-
+endif
 deque_SOURCES = deque.c
 freelist_SOURCES = freelist.c
 msgbuff_SOURCES = msgbuff.c

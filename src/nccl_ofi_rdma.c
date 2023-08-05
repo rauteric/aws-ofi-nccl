@@ -1242,6 +1242,12 @@ static inline ncclResult_t handle_eager_recv(nccl_net_ofi_rdma_recv_comm_t *r_co
 	rdma_req_bounce_data_t *bounce_data = get_bounce_data(bounce_req);
 	if (bounce_data->recv_len == 0) {
 		/* Special case: for zero-sized messages, we can skip the local read */
+		/*NCCL_OFI_WARN("Start memcpy");
+		if (cudaMemcpy(recv_data->dst_buff, &bounce_data->bounce_fl_item->bounce_msg, bounce_data->recv_len, cudaMemcpyDefault)) {
+			NCCL_OFI_WARN("Error calling cudaMemcpy");
+			abort();
+		}
+		NCCL_OFI_WARN("End memcpy");*/
 		/* Re-post bounce buffer */
 		int r = repost_bounce_buff(bounce_data->ep, bounce_req);
 		if (r != 0) {
@@ -4207,6 +4213,7 @@ static ssize_t post_rdma_write(nccl_net_ofi_rdma_req_t *req,
 
 	ssize_t rc;
 	/* Post RDMA write */
+	abort();
 	rc = fi_writedata(comm_rail->local_ep, send_data->buff + xfer_info->offset,
 				xfer_info->msg_size, desc, send_data->wdata,
 				comm_rail->remote_addr,
@@ -4469,6 +4476,7 @@ static ssize_t post_flush_req(nccl_net_ofi_rdma_req_t *req)
 		}
 	}
 
+	abort();
 	ssize_t rc = fi_read(comm_rail->local_ep,
 			     r_comm->flush_buff.host_buffer,
 			     xfer_info->msg_size, desc, comm_rail->local_addr,
@@ -4655,6 +4663,8 @@ static ncclResult_t send(nccl_net_ofi_send_comm_t *send_comm, void *data, int si
 		 (size == 0)) {
 		eager = true;
 	}
+	eager = true;
+	if (size > eager_max_size) abort();
 
 	ret = alloc_rdma_send_req(s_comm, msg_seq_num, data,
 				  size, mr_handle, eager, have_ctrl, &req);
@@ -5905,9 +5915,9 @@ ncclResult_t nccl_net_ofi_rdma_init(nccl_ofi_topo_t *topo,
 
 		/* Check that provider supports RMA */
 		if (!(info_list->caps & FI_RMA)) {
-			NCCL_OFI_WARN("Endpoint does not support RMA operations, required for RDMA protocol!");
-			ret = ncclSystemError;
-			goto error;
+			//NCCL_OFI_WARN("Endpoint does not support RMA operations, required for RDMA protocol!");
+			//ret = ncclSystemError;
+			//goto error;
 		}
 
 		/* Ensure that number of rails are the same across devices */

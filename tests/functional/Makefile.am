@@ -25,4 +25,4 @@ cuda_check_SOURCES = cuda_check.c
 # Override the LDADD for this check to avoid the -lcudart used by the
 # other tests, since the purpose of this test is to make sure we
 # didn't leak direct cuda dependencies into the plugin.
-cuda_check_LDADD = $(top_builddir)/src/libnccl-net.la
+# cuda_check_LDADD = $(top_builddir)/src/libnccl-net.la

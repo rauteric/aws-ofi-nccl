@@ -200,6 +200,9 @@ static pthread_mutex_t topo_file_lock;
  */
 #define RDMA_DATA_TAG 0
 
+#define pthread_mutex_lock(...) (0)
+#define pthread_mutex_unlock(...) (0)
+
 /** Global variables **/
 
 /* Maximum size of an eager message (see OFI_NCCL_EAGER_MAX_SIZE) */

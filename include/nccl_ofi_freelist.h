@@ -197,7 +197,6 @@ static inline void *nccl_ofi_freelist_entry_alloc(nccl_ofi_freelist_t *freelist)
 
 	assert(freelist);
 
-	ret = pthread_mutex_lock(&freelist->lock);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Locking freelist mutex failed: %s", strerror(ret));
 		return NULL;
@@ -216,7 +215,6 @@ static inline void *nccl_ofi_freelist_entry_alloc(nccl_ofi_freelist_t *freelist)
 	buf = entry->ptr;
 
 cleanup:
-	ret = pthread_mutex_unlock(&freelist->lock);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Unlocking freelist mutex failed: %s", strerror(ret));
 		return NULL;
@@ -240,7 +238,6 @@ static inline void nccl_ofi_freelist_entry_free(nccl_ofi_freelist_t *freelist, v
 	assert(freelist);
 	assert(entry_p);
 
-	ret = pthread_mutex_lock(&freelist->lock);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Locking freelist mutex failed: %s", strerror(ret));
 		return;
@@ -256,7 +253,6 @@ static inline void nccl_ofi_freelist_entry_free(nccl_ofi_freelist_t *freelist, v
 	entry->next = freelist->entries;
 	freelist->entries = entry;
 
-	ret = pthread_mutex_unlock(&freelist->lock);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Unlocking freelist mutex failed: %s", strerror(ret));
 		return;

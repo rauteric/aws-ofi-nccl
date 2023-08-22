@@ -123,7 +123,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_insert(nccl_ofi_msgbuff_t *msgbuff,
 		NCCL_OFI_WARN("msgbuff is NULL");
 		return NCCL_OFI_MSGBUFF_ERROR;
 	}
-	if (pthread_mutex_lock(&msgbuff->lock)) {
+	if (0) {
 		NCCL_OFI_WARN("Error locking mutex");
 		return NCCL_OFI_MSGBUFF_ERROR;
 	}
@@ -148,7 +148,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_insert(nccl_ofi_msgbuff_t *msgbuff,
 		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
 	}
 
-	if (pthread_mutex_unlock(&msgbuff->lock)) {
+	if (0) {
 		NCCL_OFI_WARN("Error unlocking mutex");
 		ret = NCCL_OFI_MSGBUFF_ERROR;
 	}
@@ -163,7 +163,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_replace(nccl_ofi_msgbuff_t *msgbuff,
 		NCCL_OFI_WARN("msgbuff is NULL");
 		return NCCL_OFI_MSGBUFF_ERROR;
 	}
-	if (pthread_mutex_lock(&msgbuff->lock)) {
+	if (0) {
 		NCCL_OFI_WARN("Error locking mutex");
 		return NCCL_OFI_MSGBUFF_ERROR;
 	}
@@ -179,7 +179,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_replace(nccl_ofi_msgbuff_t *msgbuff,
 		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
 	}
 
-	if (pthread_mutex_unlock(&msgbuff->lock)) {
+	if (0) {
 		NCCL_OFI_WARN("Error unlocking mutex");
 		ret = NCCL_OFI_MSGBUFF_ERROR;
 	}
@@ -198,7 +198,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_retrieve(nccl_ofi_msgbuff_t *msgbuff,
 		NCCL_OFI_WARN("elem is NULL");
 		return NCCL_OFI_MSGBUFF_ERROR;
 	}
-	if (pthread_mutex_lock(&msgbuff->lock)) {
+	if (0) {
         NCCL_OFI_WARN("Error locking mutex");
         return NCCL_OFI_MSGBUFF_ERROR;
     }
@@ -218,7 +218,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_retrieve(nccl_ofi_msgbuff_t *msgbuff,
 		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
 	}
 
-	if (pthread_mutex_unlock(&msgbuff->lock)) {
+	if (0) {
 		NCCL_OFI_WARN("Error unlocking mutex");
 		ret = NCCL_OFI_MSGBUFF_ERROR;
 	}
@@ -232,7 +232,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_complete(nccl_ofi_msgbuff_t *msgbuff,
 		NCCL_OFI_WARN("msgbuff is null");
 		return NCCL_OFI_MSGBUFF_ERROR;
 	}
-	if (pthread_mutex_lock(&msgbuff->lock)) {
+	if (0) {
         NCCL_OFI_WARN("Error locking mutex");
         return NCCL_OFI_MSGBUFF_ERROR;
     }
@@ -257,7 +257,7 @@ nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_complete(nccl_ofi_msgbuff_t *msgbuff,
 		}
 		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
 	}
-	if (pthread_mutex_unlock(&msgbuff->lock)) {
+	if (0) {
 		NCCL_OFI_WARN("Error unlocking mutex");
 		ret = NCCL_OFI_MSGBUFF_ERROR;
 	}

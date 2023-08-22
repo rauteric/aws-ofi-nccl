@@ -25,7 +25,6 @@ static inline int64_t ofi_nccl_##name() { \
     if (initialized) { \
 	return value; \
     } \
-    pthread_mutex_lock(&ofi_nccl_param_lock_##name); \
     int64_t v; \
     char *str, *endptr; \
     if (!initialized) { \
@@ -45,7 +44,6 @@ static inline int64_t ofi_nccl_##name() { \
         } \
 	initialized = true; \
     } \
-    pthread_mutex_unlock(&ofi_nccl_param_lock_##name); \
     return value; \
 }
 
@@ -57,7 +55,6 @@ static inline const char *ofi_nccl_##name() { \
     if (initialized) { \
 	return value; \
     } \
-    pthread_mutex_lock(&ofi_nccl_param_lock_##name); \
     char *str; \
     if (!initialized) { \
         str = getenv("OFI_NCCL_" env); \
@@ -75,7 +72,6 @@ static inline const char *ofi_nccl_##name() { \
         } \
 	initialized = true; \
     } \
-    pthread_mutex_unlock(&ofi_nccl_param_lock_##name); \
     return value; \
 }
 

@@ -1220,9 +1220,7 @@ static ncclResult_t accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		 * refcnt and free it up when nccl_net_ofi_closeRecv is
 		 * called.
 		 */
-		pthread_mutex_lock(&(device->ep_lock));
 		ep->ref_cnt++;
-		pthread_mutex_unlock(&(device->ep_lock));
 
 		/* Prepare receive request to accept connections */
 		req = prepare_recv_req(l_comm);
@@ -1940,7 +1938,6 @@ static ncclResult_t release_ep(nccl_net_ofi_ep_t *base_ep)
 		goto exit;
 	}
 
-	pthread_mutex_lock(&device->ep_lock);
 
 	/* Decrease reference counter of endpoint. */
 	ep->ref_cnt--;
@@ -1970,7 +1967,6 @@ static ncclResult_t release_ep(nccl_net_ofi_ep_t *base_ep)
 		ep->cq = NULL;
 	}
 
-	pthread_mutex_unlock(&device->ep_lock);
 
  exit:
 	return ret;
@@ -1992,7 +1988,6 @@ static ncclResult_t get_ep(nccl_net_ofi_device_t *base_dev,
 	int dev_id = device->base.dev_id;
 
 	/* Obtain lock */
-	pthread_mutex_lock(&device->ep_lock);
 
 	/* Obtain thread-local sendrecv endpoint. Allocate and
 	 * initialize endpoint if neccessary. */
@@ -2040,7 +2035,6 @@ static ncclResult_t get_ep(nccl_net_ofi_device_t *base_dev,
 	*base_ep = &ep->base;
 
  unlock:
-	pthread_mutex_unlock(&device->ep_lock);
 
  exit:
 	return ret;

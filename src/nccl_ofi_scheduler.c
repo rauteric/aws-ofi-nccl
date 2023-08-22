@@ -62,7 +62,7 @@ static inline int set_round_robin_schedule(nccl_net_ofi_threshold_scheduler_t *s
 	int rail_id;
 	int ret;
 
-	ret = pthread_mutex_lock(&scheduler->rr_lock);
+	ret = 0;
 	if (OFI_UNLIKELY(ret)) {
 		NCCL_OFI_WARN("Locking threshold scheduler mutex failed: %s", strerror(ret));
 		return -ret;
@@ -72,7 +72,6 @@ static inline int set_round_robin_schedule(nccl_net_ofi_threshold_scheduler_t *s
 	rail_id = (scheduler->rr_counter)++;
 	scheduler->rr_counter = scheduler->rr_counter == num_rails ? 0 : scheduler->rr_counter;
 
-	ret = pthread_mutex_unlock(&scheduler->rr_lock);
 	if (OFI_UNLIKELY(ret)) {
 		NCCL_OFI_WARN("Unlocking threshold scheduler mutex failed: %s", strerror(ret));
 		return -ret;

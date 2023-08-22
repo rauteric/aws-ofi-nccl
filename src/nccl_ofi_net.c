@@ -135,7 +135,6 @@ uint64_t nccl_net_ofi_allocate_mr_key(nccl_ofi_mr_keypool_t *key_pool)
 		return FI_KEY_NOTAVAIL;
 	}
 
-	pthread_mutex_lock(lock);
 
 	for (size_t i = 0; i < num_mr_keys; i++) {
 		if (mr_keys[i]) {
@@ -148,7 +147,6 @@ uint64_t nccl_net_ofi_allocate_mr_key(nccl_ofi_mr_keypool_t *key_pool)
 	if (key == FI_KEY_NOTAVAIL)
 		NCCL_OFI_WARN("No MR keys available (max: %d)", num_mr_keys);
 
-	pthread_mutex_unlock(lock);
 	return key;
 }
 
@@ -180,11 +178,9 @@ ncclResult_t nccl_net_ofi_free_mr_key(nccl_ofi_mr_keypool_t *key_pool, uint64_t 
 		return ncclInternalError;
 	}
 
-	pthread_mutex_lock(lock);
 
 	mr_keys[key] = true;
 
-	pthread_mutex_unlock(lock);
 
 	return ncclSuccess;
 }

@@ -1365,7 +1365,7 @@ static inline int handle_write_comp(struct fi_cq_tagged_entry *cq_entry,
 		return ncclSystemError;
 	}
 
-	NCCL_OFI_TRACE_RECV_SEGMENT_COMPLETE(req->dev_id, rail_id, cq_entry->len, req);
+	NCCL_OFI_TRACE_RECV_SEGMENT_COMPLETE(req->dev_id, rail_id, cq_entry->len, req->msg_seq_num, ((nccl_net_ofi_rdma_recv_comm_t *)(req->comm))->local_tag, req);
 
 	return 0;
 }

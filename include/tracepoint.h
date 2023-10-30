@@ -172,17 +172,21 @@ LTTNG_UST_TRACEPOINT_EVENT(
             int, dev,
             int, rail_id,
             size_t, size,
+	    uint16_t, msg_seq_num,
+	    uint64_t, tag,
             void *, request
     ),
     LTTNG_UST_TP_FIELDS(
             lttng_ust_field_integer(int, dev, dev)
             lttng_ust_field_integer(int, rail_id, rail_id)
             lttng_ust_field_integer(size_t, size, size)
+            lttng_ust_field_integer(uint16_t, msg_seq_num, msg_seq_num)
+            lttng_ust_field_integer(uint64_t, tag, tag)
             lttng_ust_field_integer_hex(uint64_t, request, (uint64_t)request)
     )
 )
-#define NCCL_OFI_TRACE_RECV_SEGMENT_COMPLETE(dev, rail_id, size, request) \
-	lttng_ust_tracepoint(nccl_ofi_plugin, Recv_segment_complete, dev, rail_id, size, request)
+#define NCCL_OFI_TRACE_RECV_SEGMENT_COMPLETE(dev, rail_id, size, msg_seq_num, tag, request) \
+	lttng_ust_tracepoint(nccl_ofi_plugin, Recv_segment_complete, dev, rail_id, size, msg_seq_num, tag, request)
 
 LTTNG_UST_TRACEPOINT_EVENT(
     nccl_ofi_plugin,

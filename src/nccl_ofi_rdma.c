@@ -5892,8 +5892,9 @@ static nccl_net_ofi_rdma_device_rail_t *create_device_rail_array(struct fi_info 
 }
 
 int nccl_net_ofi_rdma_init(nccl_ofi_topo_t *topo,
-				    bool provide_own_mr_key,
-				    nccl_net_ofi_plugin_t **plugin_p)
+			   struct fi_info *ofi_info_list, int num_infos,
+			   bool use_topo, bool provide_own_mr_key,
+			   nccl_net_ofi_plugin_t **plugin_p)
 {
 	int ret = 0;
 	int dev_id = 0;
@@ -5926,41 +5927,49 @@ int nccl_net_ofi_rdma_init(nccl_ofi_topo_t *topo,
 		goto error;
 	}
 
-	ret = nccl_ofi_topo_group(topo);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to group NICs");
-		goto error;
-	}
+	if (use_topo) {
+		ret = nccl_ofi_topo_group(topo);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to group NICs");
+			goto error;
+		}
 
-	num_rails = topo->max_group_size;
-	if (num_rails > MAX_NUM_RAILS) {
-		NCCL_OFI_WARN("Unexpected number of rails of device %i. Maximum is %i but got %i",
-			      dev_id, MAX_NUM_RAILS, num_rails);
-		ret = ncclInternalError;
-		goto error;
-	}
-	if (num_rails < 1) {
-		NCCL_OFI_WARN("Unexpected number of rails of device %i. Expected at least one NIC but got %i",
-			      dev_id, num_rails);
-		ret = ncclInternalError;
-		goto error;
-	}
+		num_rails = topo->max_group_size;
+		if (num_rails > MAX_NUM_RAILS) {
+			NCCL_OFI_WARN("Unexpected number of rails of device %i. Maximum is %i but got %i",
+				dev_id, MAX_NUM_RAILS, num_rails);
+			ret = ncclInternalError;
+			goto error;
+		}
+		if (num_rails < 1) {
+			NCCL_OFI_WARN("Unexpected number of rails of device %i. Expected at least one NIC but got %i",
+				dev_id, num_rails);
+			ret = ncclInternalError;
+			goto error;
+		}
 
-	ret = write_topo_file(topo);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to write NCCL topology file");
-		goto error;
-	}
+		ret = write_topo_file(topo);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to write NCCL topology file");
+			goto error;
+		}
 
-	ret = nccl_ofi_topo_num_info_lists(topo, &num_devs);
-	if (ret != 0) {
-		goto error;
-	} else if (num_devs <= 0)  {
-		NCCL_OFI_WARN("Topology reported unexpected number of devices. "
-			      "Expected value larger than zero but got %i",
-			      num_devs);
-		ret = ncclInternalError;;
-		goto error;
+		ret = nccl_ofi_topo_num_info_lists(topo, &num_devs);
+		if (ret != 0) {
+			goto error;
+		} else if (num_devs <= 0)  {
+			NCCL_OFI_WARN("Topology reported unexpected number of devices. "
+				"Expected value larger than zero but got %i",
+				num_devs);
+			ret = ncclInternalError;;
+			goto error;
+		}
+	} else {
+		/*
+		 * Fallback code for providers that don't provide topology information
+		 */
+		num_rails = 1;
+		num_devs = num_infos;
 	}
 
 	base_devs = calloc(num_devs, sizeof(nccl_net_ofi_rdma_device_t *));
@@ -5973,19 +5982,25 @@ int nccl_net_ofi_rdma_init(nccl_ofi_topo_t *topo,
 
 	nccl_net_ofi_init_plugin(plugin, base_devs, num_devs);
 
-	/* Initialize user data iterator */
-	nccl_ofi_topo_data_iterator_t data_iter;
-	ret = nccl_ofi_topo_set_to_begin(topo, &data_iter);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to set iterator to begin of user data vector");
-		ret = ncclInternalError;
-		goto error;
+	nccl_ofi_topo_data_iterator_t data_iter = {0};
+	if (use_topo) {
+		/* Initialize user data iterator */
+		ret = nccl_ofi_topo_set_to_begin(topo, &data_iter);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to set iterator to begin of user data vector");
+			ret = ncclInternalError;
+			goto error;
+		}
+	} else {
+		info_list = ofi_info_list;
 	}
 
 	/* Allocate and initialize nccl_net devices */
 	for (; dev_id != num_devs; ++dev_id) {
 		/* Retrieve NIC info list from topology */
-		info_list = nccl_ofi_topo_next_info_list(&data_iter);
+		if (use_topo) {
+			info_list = nccl_ofi_topo_next_info_list(&data_iter);
+		}
 
 		/* Check that provider does not require FI_CONTEXT */
 		if ((info_list->mode & FI_CONTEXT) ||
@@ -6003,12 +6018,14 @@ int nccl_net_ofi_rdma_init(nccl_ofi_topo_t *topo,
 		}
 
 		/* Ensure that number of rails are the same across devices */
-		int length = ofi_info_list_length(info_list);
-		if (num_rails != length) {
-			NCCL_OFI_WARN("Wrong number of NICs for device %i. Expected %i but got %i",
-				      dev_id, num_rails, length);
-			ret = ncclInternalError;
-			goto error;
+		if (use_topo) {
+			int length = ofi_info_list_length(info_list);
+			if (num_rails != length) {
+				NCCL_OFI_WARN("Wrong number of NICs for device %i. Expected %i but got %i",
+					dev_id, num_rails, length);
+				ret = ncclInternalError;
+				goto error;
+			}
 		}
 
 		/* Verify NIC info list from topology */
@@ -6074,6 +6091,9 @@ int nccl_net_ofi_rdma_init(nccl_ofi_topo_t *topo,
 
 		/* Initialize mr key pool */
 		nccl_ofi_mr_keys_init(&device->key_pool, provide_own_mr_key);
+
+		if (!use_topo)
+		info_list = info_list->next;
 	}
 
 	goto exit;

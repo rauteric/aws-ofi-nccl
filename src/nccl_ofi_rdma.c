@@ -5254,6 +5254,13 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 
 static void ep_rail_release(nccl_net_ofi_ep_rail_t *rail, int dev_id)
 {
+	if (ofi_nccl_endpoint_per_communicator() != 0) {
+		/* when using an endpoint per communicator with a shared cq
+		(instead of a cq per endpoint), set the rail->cq pointer to NULL
+		here so	that the cq isn't actually released in ep_release().
+		The cq will be released when the domain is cleaned up */
+		rail->cq = NULL;
+	}
 	nccl_ofi_ofiutils_ep_release(rail->ofi_ep, rail->av,
 				     rail->cq, dev_id);
 	rail->ofi_ep = NULL;
@@ -5324,7 +5331,17 @@ static int ep_rail_init(nccl_net_ofi_rdma_ep_t *ep,
 		ep_rail->domain = dev_rail->domain;
 	}
 
-	ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, ep_rail->domain, &ep_rail->ofi_ep,
+	ep_rail->cq = dev_rail->cq;
+
+#ifndef NDEBUG
+	if (ofi_nccl_endpoint_per_communicator() != 0) {
+		assert(ep_rail->cq != NULL);
+	} else {
+		assert(ep_rail->cq == NULL);
+	}
+#endif
+
+	ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &ep_rail->ofi_ep,
 						&ep_rail->av, &ep_rail->cq);
 	if (ret != 0) {
 		return ret;
@@ -5458,9 +5475,13 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 	/* Obtain lock */
 	nccl_net_ofi_mutex_lock(&device->ep_lock);
 
-	/* Obtain thread-local rdma endpoint. Allocate and
-	 * initialize endpoint if necessary. */
-	nccl_net_ofi_rdma_ep_t *ep = pthread_getspecific(device->ep_key);
+	int ep_per_comm = ofi_nccl_endpoint_per_communicator();
+	nccl_net_ofi_rdma_ep_t *ep = NULL;
+	if (ep_per_comm == 0) {
+		/* Obtain thread-local rdma endpoint. Allocate and
+		 * initialize endpoint if neccessary. */
+		ep = pthread_getspecific(device->ep_key);
+	}
 	if (!ep) {
 		int num_rails = device->num_rails;
 
@@ -5573,6 +5594,21 @@ static int init_device_rail_ofi_resources(nccl_net_ofi_rdma_device_rail_t *rail_
 		}
 	}
 
+	if (ofi_nccl_endpoint_per_communicator() != 0) {
+		/* Create device-shared completion queue */
+		struct fi_cq_attr cq_attr = {0};
+		cq_attr.format = FI_CQ_FORMAT_DATA;
+		ret = fi_cq_open(rail_dev->domain, &cq_attr, &rail_dev->cq, NULL);
+		if (OFI_UNLIKELY(ret != 0)) {
+			NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
+					ret, fi_strerror(-ret));
+			goto error;
+		}
+		assert(rail_dev->cq != NULL);
+	} else {
+		rail_dev->cq = NULL;
+	}
+
 	return ret;
  error:
 	if (rail_dev->domain) {
@@ -5649,6 +5685,13 @@ static void release_device_ofi_resources(nccl_net_ofi_rdma_device_t *device)
 		}
 		if (begin->info) {
 			fi_freeinfo(begin->info);
+		}
+		if (begin->cq) {
+			assert(ofi_nccl_endpoint_per_communicator() != 0);
+			int r = fi_close(&begin->cq->fid);
+			if (r) {
+				NCCL_OFI_WARN("Failed to close cq: %d", r);
+			}
 		}
 	}
 }
@@ -6043,6 +6086,13 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 		goto error;
 	}
 	eager_max_size = (size_t) ofi_nccl_eager_max_size();
+
+	if (domain_per_thread == 1 && ofi_nccl_endpoint_per_communicator() != 0) {
+		/* TODO support this configuration */
+		NCCL_OFI_WARN("domain_per_thread == 1 and ofi_nccl_endpoint_per_communicator() != 0 are not supported together");
+		ret = ncclInvalidArgument;
+		goto error;
+	}
 
 	/* Create NCCL OFI topology */
 	topo = nccl_ofi_topo_create(provider_list);

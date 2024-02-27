@@ -4932,11 +4932,28 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 
 	assert(!eager);
 
-	if (multi_send_ready) {
-		rdma_req_send_data_t *send_data = get_send_data(req);
+	/* Send message */
+	ret = send_progress(req);
+	if (ret == -FI_EAGAIN) {
+		/* Add to pending reqs queue */
+		ret = nccl_ofi_deque_insert_back(ep->pending_reqs_queue, &req->pending_reqs_elem);
+		if (ret != 0) {
+			assert(false);
+			NCCL_OFI_WARN("Failed to nccl_ofi_deque_insert_back: %d", ret);
+			goto exit;
+		}
+	} else if (OFI_UNLIKELY(ret != 0)) {
+		/* TODO: Remove req from message buffer */
+		ret = -ENOTSUP;
+		assert(false);
+		goto exit;
+	}
 
+	if (multi_send_ready) {
+#if 0
 		ret = rdma_post_multi_send(s_comm, send_data->multi_recv_start,
 			send_data->multi_recv_size);
+#endif
 
 		/* Re-post bounce buffer if needed */
 		nccl_net_ofi_rdma_req_t *bounce_req = elem;

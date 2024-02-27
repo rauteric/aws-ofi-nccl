@@ -223,7 +223,7 @@ static bool test_ms_ready(nccl_ofi_msgbuff_t *msgbuff, uint16_t multi_recv_start
 	for (uint16_t i = multi_recv_start; i != (uint16_t)(multi_recv_start + multi_recv_size);
 	    ++i) {
 		nccl_ofi_msgbuff_status_t msg_idx_status = nccl_ofi_msgbuff_get_idx_status(msgbuff, i);
-		if (msg_idx_status != NCCL_OFI_MSGBUFF_INPROGRESS) {
+		if (msg_idx_status != NCCL_OFI_MSGBUFF_INPROGRESS && msg_idx_status != NCCL_OFI_MSGBUFF_COMPLETED) {
 			return false;
 		}
 		if (buff_idx(msgbuff, i)->type != NCCL_OFI_MSGBUFF_REQ) {

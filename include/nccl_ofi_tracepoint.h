@@ -25,12 +25,12 @@
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_START(dev, rail_id, size, comm, msg_seq_num, request) do { \
 		lttng_ust_tracepoint(nccl_ofi_plugin, Send_write_segment_start, dev, rail_id, size, comm, msg_seq_num, request); \
-		nvtx_push("Send_write_segment_start"); \
+		get_send_data(request)->seg_trace_id[rail_id] = nvtx_start("Send_write_seg", 0xff0000); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_COMPLETE(dev, rail_id, comm, msg_seq_num, request) do { \
 	lttng_ust_tracepoint(nccl_ofi_plugin, Send_write_segment_complete, dev, rail_id, comm, msg_seq_num, request); \
-	nvtx_push("Send_write_segment_complete");                           \
+	nvtx_end(get_send_data(request)->seg_trace_id[rail_id]); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_RECV(dev, tag, size, request, nccl_req) do { \

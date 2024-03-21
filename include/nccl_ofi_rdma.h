@@ -155,6 +155,7 @@ typedef struct {
 	int total_num_compls;
 #if HAVE_NVTX_TRACING
 	nvtxRangeId_t trace_id;
+	nvtxRangeId_t seg_trace_id[MAX_NUM_RAILS];
 #endif
 } rdma_req_send_data_t;
 

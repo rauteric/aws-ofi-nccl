@@ -727,6 +727,11 @@ static inline int inc_req_completion(nccl_net_ofi_rdma_req_t *req,
 		/* Trace this completion */
 		NCCL_OFI_TRACE_COMPLETIONS(req, req);
                 NCCL_OFI_TRACE_POP();
+		if (req->type == NCCL_OFI_RDMA_SEND) {
+			NCCL_OFI_TRACE_SEND_END(req);
+		} else if (req->type == NCCL_OFI_RDMA_RECV) {
+			NCCL_OFI_TRACE_RECV_END(req);
+		}
 	}
 
 	ret = pthread_mutex_unlock(&req->req_lock);

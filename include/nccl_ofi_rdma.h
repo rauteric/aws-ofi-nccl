@@ -21,6 +21,7 @@ extern "C" {
 #include "nccl_ofi_deque.h"
 #include "nccl_ofi_freelist.h"
 #include "nccl_ofi_idpool.h"
+#include "nccl_ofi_tracepoint.h"
 
 /* Maximum number of rails supported. This defines the size of
  * messages exchanged during connection establishment (linear
@@ -152,6 +153,9 @@ typedef struct {
 	/* Total number of completions. Expect one completion for receiving the
 	 * control message and one completion for each send segment. */
 	int total_num_compls;
+#if HAVE_NVTX_TRACING
+	nvtxRangeId_t trace_id;
+#endif
 } rdma_req_send_data_t;
 
 /*
@@ -206,6 +210,9 @@ typedef struct {
 	 * For eager messages, the second completion will be received
 	 * when the local read into the destination buffer is complete */
 	int total_num_compls;
+#if HAVE_NVTX_TRACING
+	nvtxRangeId_t trace_id;
+#endif
 } rdma_req_recv_data_t;
 
 /*

@@ -11,8 +11,12 @@
 
 #define NCCL_OFI_TRACE_SEND(dev, size, comm, msg_seq_num, request, nccl_req) do { \
 	lttng_ust_tracepoint(nccl_ofi_plugin, Send, dev, size, comm, msg_seq_num, request, nccl_req); \
-	nvtx_push("Send"); \
+	get_send_data(request)->trace_id = nvtx_start("Send", 0xeb9234); \
 	} while(0)
+
+#define NCCL_OFI_TRACE_SEND_END(request) do { \
+	nvtx_end(get_send_data(request)->trace_id); \
+} while(0)
 
 #define NCCL_OFI_TRACE_SEND_CTRL_RECV(dev, rail_id, comm, msg_seq_num) do { \
 		lttng_ust_tracepoint(nccl_ofi_plugin, Send_ctrl_recv, dev, rail_id, comm, msg_seq_num); \
@@ -31,8 +35,12 @@
 
 #define NCCL_OFI_TRACE_RECV(dev, tag, size, request, nccl_req) do { \
 	lttng_ust_tracepoint(nccl_ofi_plugin, Recv, dev, tag, size, request, nccl_req); \
-	nvtx_push("Recv"); \
+	get_recv_data(request)->trace_id = nvtx_start("Recv", 0x34EB37); \
 	} while(0)
+
+#define NCCL_OFI_TRACE_RECV_END(request) do { \
+	nvtx_end(get_recv_data(request)->trace_id); \
+} while(0)
 
 #define NCCL_OFI_TRACE_RECV_CTRL_SEND_COMPLETE(request) do { \
 		lttng_ust_tracepoint(nccl_ofi_plugin, Recv_ctrl_send_complete, request); \

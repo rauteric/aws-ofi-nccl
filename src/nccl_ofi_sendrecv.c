@@ -856,7 +856,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 			desc = fi_mr_desc(mr_handles[recv_n]);
 		}
 
-		NCCL_OFI_TRACE_RECV(dev_id, r_comm->tag, sizes[recv_n], req, base_req);
+		// NCCL_OFI_TRACE_RECV(dev_id, r_comm->tag, sizes[recv_n], req, base_req);
 
 		/*
 		 * TODO: Use NCCL provided tags when plugin supports grouped
@@ -1638,7 +1638,7 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 	if (mr_handle != NULL)
 		desc = fi_mr_desc(mr_handle);
 
-	NCCL_OFI_TRACE_SEND(req->dev_id, size, s_comm, 0, req, base_req);
+	// NCCL_OFI_TRACE_SEND(req->dev_id, size, s_comm, 0, req, base_req);
 
 	/*
 	 * Try sending data to remote EP; Return NULL request

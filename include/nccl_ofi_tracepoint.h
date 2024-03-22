@@ -11,11 +11,11 @@
 
 #define NCCL_OFI_TRACE_SEND(dev, size, comm, msg_seq_num, request, nccl_req) do { \
 	lttng_ust_tracepoint(nccl_ofi_plugin, Send, dev, size, comm, msg_seq_num, request, nccl_req); \
-	get_send_data(request)->trace_id = nvtx_start("Send", 0xeb9234); \
+	get_send_data(request)->trace_id = nvtx_start_domain(true, ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain, "Send", 0xeb9234); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_SEND_END(request) do { \
-	nvtx_end(get_send_data(request)->trace_id); \
+	nvtx_end_domain(((nccl_net_ofi_rdma_send_comm_t*)(request->comm))->nvtx_domain, get_send_data(request)->trace_id); \
 } while(0)
 
 #define NCCL_OFI_TRACE_SEND_CTRL_RECV(dev, rail_id, comm, msg_seq_num) do { \
@@ -25,12 +25,12 @@
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_START(dev, rail_id, size, comm, msg_seq_num, request) do { \
 		lttng_ust_tracepoint(nccl_ofi_plugin, Send_write_segment_start, dev, rail_id, size, comm, msg_seq_num, request); \
-		get_send_data(request)->seg_trace_id[rail_id] = nvtx_start("Send_write_seg", 0xff0000); \
+		get_send_data(request)->seg_trace_id[rail_id] = nvtx_start_domain(true, ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain, "Send_write_seg", 0xff0000); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_COMPLETE(dev, rail_id, comm, msg_seq_num, request) do { \
 	lttng_ust_tracepoint(nccl_ofi_plugin, Send_write_segment_complete, dev, rail_id, comm, msg_seq_num, request); \
-	nvtx_end(get_send_data(request)->seg_trace_id[rail_id]); \
+	nvtx_end_domain(((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain, get_send_data(request)->seg_trace_id[rail_id]); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_RECV(dev, tag, size, request, nccl_req) do { \

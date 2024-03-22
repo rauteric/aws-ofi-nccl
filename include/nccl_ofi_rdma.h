@@ -380,8 +380,13 @@ typedef struct nccl_net_ofi_rdma_send_comm {
 	 * and `num_init_rails' is adjusted. */
 	int num_init_rails;
 
+#if HAVE_NVTX_TRACING
+	nvtxDomainHandle_t nvtx_domain;
+#endif
+
 	/* Array of `num_rails` communicator rails */
 	nccl_net_ofi_rdma_send_comm_rail_t rails[];
+
 } nccl_net_ofi_rdma_send_comm_t;
 
 /*

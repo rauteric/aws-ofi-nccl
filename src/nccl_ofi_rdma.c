@@ -4794,6 +4794,9 @@ static int send_close(nccl_net_ofi_rdma_send_comm_t *s_comm)
 		NCCL_OFI_WARN("Error freeing communicator ID %"PRIu64"", s_comm->local_comm_id);
 	}
 
+	/* Destroy domain */
+	nvtxDomainDestroy(s_comm->nvtx_domain);
+
 	free(s_comm);
 
  exit:
@@ -5093,6 +5096,14 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 		goto error;
 	}
 
+#if HAVE_NVTX_TRACING
+	{
+		/* Create nvtx domain */
+		char name[64];
+		snprintf(name, 64, "aws-ofi-nccl s_comm %p", ret_s_comm);
+		ret_s_comm->nvtx_domain = nvtxDomainCreateA(name);
+	}
+#endif
 	*s_comm = ret_s_comm;
 	return ret;
 

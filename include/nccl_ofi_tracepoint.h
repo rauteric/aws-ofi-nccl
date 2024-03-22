@@ -9,9 +9,11 @@
 #include "tracing_impl/nvtx.h"
 #include "tracing_impl/lttng.h"
 
+#define NVTX_SEQ_MOD 8
+
 #define NCCL_OFI_TRACE_SEND(dev, size, comm, msg_seq_num, request, nccl_req) do { \
 	lttng_ust_tracepoint(nccl_ofi_plugin, Send, dev, size, comm, msg_seq_num, request, nccl_req); \
-	get_send_data(request)->trace_id = nvtx_start_domain(true, ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain, "Send", 0xeb9234); \
+	get_send_data(request)->trace_id = nvtx_start_domain(true, ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain, "Send", 0xeb9234, msg_seq_num % NVTX_SEQ_MOD); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_SEND_END(request) do { \
@@ -25,7 +27,7 @@
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_START(dev, rail_id, size, comm, msg_seq_num, request) do { \
 		lttng_ust_tracepoint(nccl_ofi_plugin, Send_write_segment_start, dev, rail_id, size, comm, msg_seq_num, request); \
-		get_send_data(request)->seg_trace_id[rail_id] = nvtx_start_domain(true, ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain, "Send_write_seg", 0xff0000); \
+		get_send_data(request)->seg_trace_id[rail_id] = nvtx_start_domain(true, ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain, "Send_write_seg", 0xff0000, msg_seq_num % NVTX_SEQ_MOD); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_COMPLETE(dev, rail_id, comm, msg_seq_num, request) do { \
@@ -35,7 +37,7 @@
 
 #define NCCL_OFI_TRACE_RECV(dev, tag, size, request, nccl_req) do { \
 	lttng_ust_tracepoint(nccl_ofi_plugin, Recv, dev, tag, size, request, nccl_req); \
-	get_recv_data(request)->trace_id = nvtx_start("Recv", 0x34EB37); \
+	get_recv_data(request)->trace_id = nvtx_start("Recv", 0x34EB37, 0); \
 	} while(0)
 
 #define NCCL_OFI_TRACE_RECV_END(request) do { \

@@ -414,6 +414,7 @@ typedef struct nccl_net_ofi_rdma_send_comm {
 	 * and `num_init_rails' is adjusted. */
 	int num_init_rails;
 
+	bool tracing;
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[NCCL_OFI_N_NVTX_DOMAIN_PER_COMM];
 #endif
@@ -480,6 +481,8 @@ typedef struct nccl_net_ofi_rdma_recv_comm {
 
 	/* Free list to track control buffers, for sending RDMA control messages */
 	nccl_ofi_freelist_t *ctrl_buff_fl;
+
+	bool tracing;
 
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[NCCL_OFI_N_NVTX_DOMAIN_PER_COMM];
@@ -605,6 +608,10 @@ struct nccl_net_ofi_rdma_ep {
 	nccl_ofi_freelist_t *bounce_buff_reqs_fl;
 	/* Size of bounce buffers */
 	size_t bounce_buff_size;
+
+	/* First comm created */
+	bool first_scomm_created;
+	bool first_rcomm_created;
 };
 
 /*

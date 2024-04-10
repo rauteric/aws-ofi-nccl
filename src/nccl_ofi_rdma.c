@@ -2973,6 +2973,11 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 	nccl_net_ofi_rdma_ep_t * ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 	assert(ep != NULL);
 
+	if (!ep->first_rcomm_created) {
+		r_comm->tracing = true;
+		ep->first_rcomm_created = true;
+	}
+
 	nccl_net_ofi_rdma_device_t *device = (nccl_net_ofi_rdma_device_t*)ep->base.device;
 	assert(device != NULL);
 
@@ -3480,6 +3485,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	r_comm->base.recv = recv;
 	r_comm->base.flush = flush;
 	r_comm->base.close = recv_close;
+	r_comm->tracing = false;
 
 	/* Allocate recv communicator ID */
 	int comm_id = nccl_ofi_idpool_allocate_id(ep->comm_idpool);
@@ -4503,6 +4509,11 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
 	assert(ep != NULL);
 
+	if (!ep->first_scomm_created) {
+		s_comm->tracing = true;
+		ep->first_scomm_created = true;
+	}
+
 	/*
 	 * Try finalize connection if not established yet; Return NULL
 	 * request if not able to finalize connection.
@@ -4948,6 +4959,7 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->base.send = send;
 	ret_s_comm->base.close = blocked_send_close;
 	ret_s_comm->next_msg_seq_num = 0;
+	ret_s_comm->tracing = false;
 
 	/* Store communicator ID from handle in communicator */
 	if (OFI_UNLIKELY(handle->comm_id >= device->num_comm_ids)) {
@@ -5543,6 +5555,8 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 		ep->base.listen = listen;
 		ep->base.connect = connect;
 		ep->base.release_ep = release_ep;
+		ep->first_scomm_created=false;
+		ep->first_rcomm_created=false;
 
 		/* Initialize number of rail */
 		ep->num_rails = num_rails;

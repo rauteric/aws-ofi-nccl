@@ -51,7 +51,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 }
 
 #define NCCL_OFI_TRACE_SEND_NVTX(dev, size, comm, msg_seq_num, request, nccl_req) do { \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_send_comm_t*)comm)->tracing) { \
 		nvtxDomainHandle_t handle = ((nccl_net_ofi_rdma_send_comm_t*)comm) \
 			->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		get_send_data(request)->trace_id = nvtx_start_domain(true, handle, "Send", 0xeb9234); \
@@ -59,7 +59,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 } while (0)
 
 #define NCCL_OFI_TRACE_SEND_END_NVTX(request) do { \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_send_comm_t*)(request->comm))->tracing) { \
 		nvtxDomainHandle_t handle = ((nccl_net_ofi_rdma_send_comm_t*)(request->comm)) \
 			->nvtx_domain[request->msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		nvtx_end_domain(handle, get_send_data(request)->trace_id); \
@@ -68,7 +68,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_EAGER_SEND_START_NVTX(dev, rail_id, size, comm, msg_seq_num, request) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_send_comm_t*)comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		get_send_data(request)->seg_trace_id[rail_id] = nvtx_start_domain(true, handle, "Send_eager", 0x0000FF); \
 	} \
@@ -80,7 +80,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_EAGER_SEND_COMPLETE_NVTX(dev, rail_id, comm, msg_seq_num, request) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_send_comm_t*)comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		nvtx_end_domain(handle, get_send_data(request)->seg_trace_id[rail_id]); \
 	} \
@@ -92,7 +92,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_SEND_CTRL_RECV_NVTX(dev, rail_id, comm, msg_seq_num) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_send_comm_t*)comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		nvtx_mark_domain(handle, "Send_ctrl_recv", 0x00ffff); \
 	} \
@@ -104,7 +104,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_SEND_CTRL_START_NVTX(dev, rail_id, comm, req, msg_seq_num) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_recv_comm_t *)comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_recv_comm_t *)comm)->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		get_send_ctrl_data(req)->trace_id = nvtx_start_domain(true, handle, "Send_ctrl_start", 0x00ffff); \
 	} \
@@ -116,7 +116,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_SEND_CTRL_END_NVTX(dev, rail_id, comm, req, msg_seq_num) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_recv_comm_t *)comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_recv_comm_t *)comm)->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		nvtx_end_domain(handle, get_send_ctrl_data(req)->trace_id); \
 	} \
@@ -128,7 +128,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_START_NVTX(dev, rail_id, size, comm, msg_seq_num, request) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_send_comm_t *)comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		get_send_data(request)->seg_trace_id[rail_id] = nvtx_start_domain(true, handle, "Send_write_seg", 0xff0000); \
 	} \
@@ -140,7 +140,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_SEND_WRITE_SEG_COMPLETE_NVTX(dev, rail_id, comm, msg_seq_num, request) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_send_comm_t *)comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_send_comm_t*)comm)->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		nvtx_end_domain(handle, get_send_data(request)->seg_trace_id[rail_id]); \
 	} \
@@ -151,7 +151,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 } while(0)
 
 #define NCCL_OFI_TRACE_RECV_NVTX(dev, tag, size, request, nccl_req) do { \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_recv_comm_t *)(request->comm))->tracing) { \
 		nvtxDomainHandle_t handle = ((nccl_net_ofi_rdma_recv_comm_t *)request->comm) \
 			->nvtx_domain[msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		get_recv_data(request)->trace_id = nvtx_start_domain(true, handle, "Recv", 0x34EB37); \
@@ -159,7 +159,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 } while(0)
 
 #define NCCL_OFI_TRACE_RECV_END_NVTX(request) do { \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_recv_comm_t *)request->comm)->tracing) { \
 		nvtxDomainHandle_t handle = ((nccl_net_ofi_rdma_recv_comm_t *)request->comm) \
 			->nvtx_domain[request->msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		nvtx_end_domain(handle, get_recv_data(request)->trace_id); \
@@ -168,7 +168,7 @@ static inline void nvtx_end(nvtxRangeId_t id) {
 
 #define NCCL_OFI_TRACE_RECV_SEGMENT_COMPLETE_NVTX(dev, rail_id, size, request) do { \
 	nvtxDomainHandle_t handle; \
-	if (NCCL_OFI_NVTX_TRACE_PER_COMM) { \
+	if (NCCL_OFI_NVTX_TRACE_PER_COMM && ((nccl_net_ofi_rdma_recv_comm_t *)request->comm)->tracing) { \
 		handle = ((nccl_net_ofi_rdma_recv_comm_t *)request->comm)->nvtx_domain[request->msg_seq_num % NCCL_OFI_N_NVTX_DOMAIN_PER_COMM]; \
 		nvtx_mark_domain(handle, "Recv_segment_complete", 0xff0000); \
 	} \

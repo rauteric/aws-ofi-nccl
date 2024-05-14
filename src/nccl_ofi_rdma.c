@@ -5326,6 +5326,13 @@ static void ep_rail_release(nccl_net_ofi_ep_rail_t *rail, int dev_id)
 		plugin fini() function */
 		rail->cq = NULL;
 	}
+
+	if (ofi_nccl_endpoint_share_ofi() != 0) {
+		/* Don't release these -- they come from device */
+		rail->ofi_ep = NULL;
+		rail->av = NULL;
+	}
+
 	nccl_ofi_ofiutils_ep_release(rail->ofi_ep, rail->av,
 				     rail->cq, dev_id);
 	rail->ofi_ep = NULL;
@@ -5385,6 +5392,7 @@ static int ep_rail_init(nccl_net_ofi_rdma_ep_t *ep,
 	int ret = 0;
 
 	if (domain_per_thread == 1) {
+		abort(); /* TODO */
 		ret = fi_domain(dev_rail->fabric, dev_rail->info,
 			&ep_rail->domain, NULL);
 		if (OFI_UNLIKELY(ret != 0)) {
@@ -5401,10 +5409,25 @@ static int ep_rail_init(nccl_net_ofi_rdma_ep_t *ep,
 	assert(ofi_nccl_cq_per_endpoint() == 0 ? dev_rail->cq != NULL :
 	       dev_rail->cq == NULL);
 
-	ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &ep_rail->ofi_ep,
-						&ep_rail->av, &ep_rail->cq);
-	if (ret != 0) {
-		return ret;
+	if (ofi_nccl_endpoint_share_ofi() != 0) {
+		if (dev_rail->ofi_ep == NULL) {
+			assert(dev_rail->av == NULL);
+
+			ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &dev_rail->ofi_ep,
+								&dev_rail->av, &ep_rail->cq);
+			if (ret != 0) {
+				return ret;
+			}
+		}
+
+		ep_rail->ofi_ep = dev_rail->ofi_ep;
+		ep_rail->av = dev_rail->av;
+	} else {
+		ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &ep_rail->ofi_ep,
+							&ep_rail->av, &ep_rail->cq);
+		if (ret != 0) {
+			return ret;
+		}
 	}
 
 	ep_rail->rail_id = rail_id;
@@ -5675,6 +5698,9 @@ static int init_device_rail_ofi_resources(nccl_net_ofi_rdma_device_rail_t *rail_
 			goto error;
 		}
 	}
+
+	rail_dev->ofi_ep = NULL;
+	rail_dev->av = NULL;
 
 	return ret;
  error:

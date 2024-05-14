@@ -222,6 +222,12 @@ OFI_NCCL_PARAM_INT(eager_max_size, "EAGER_MAX_SIZE", 8192);
 OFI_NCCL_PARAM_INT(endpoint_per_communicator, "ENDPOINT_PER_COMM", 1);
 
 /*
+ * If non-0, share OFI resources across device. If 0, create separate OFI
+ * resources for each RDMA endpoint
+ */
+OFI_NCCL_PARAM_INT(endpoint_share_ofi, "ENDPOINT_SHARE_OFI", 0);
+
+/*
  * If 0, create a Libfabric CQ per domain, even if Libfabric endpoints
  * are associated with communicators.  If non-zer, create a CQ per
  * endpoint, regardless of how many endpoints are created per domain.

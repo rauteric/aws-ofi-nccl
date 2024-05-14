@@ -622,6 +622,12 @@ typedef struct nccl_net_ofi_rdma_device_rail {
 
 	/* Completion Queue handle */
 	struct fid_cq *cq;
+
+	/* Local libfabric endpoint handle */
+	struct fid_ep *ofi_ep;
+
+	/* Address vector handle */
+	struct fid_av *av;
 } nccl_net_ofi_rdma_device_rail_t;
 
 /*

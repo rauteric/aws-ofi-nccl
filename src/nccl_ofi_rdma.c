@@ -5410,6 +5410,7 @@ static int ep_rail_init(nccl_net_ofi_rdma_ep_t *ep,
 	       dev_rail->cq == NULL);
 
 	if (ofi_nccl_endpoint_share_ofi() != 0) {
+		assert(ofi_nccl_cq_per_endpoint() == 0);
 		if (dev_rail->ofi_ep == NULL) {
 			assert(dev_rail->av == NULL);
 
@@ -5933,6 +5934,10 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 		goto error;
 	}
 	eager_max_size = (size_t) ofi_nccl_eager_max_size();
+
+	if (ofi_nccl_endpoint_share_ofi() != 0 && ofi_nccl_cq_per_endpoint() != 0) {
+		abort();
+	}
 
 	plugin = malloc(sizeof(nccl_net_ofi_plugin_t));
 	if (!plugin) {

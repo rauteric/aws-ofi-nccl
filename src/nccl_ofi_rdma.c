@@ -5411,18 +5411,22 @@ static int ep_rail_init(nccl_net_ofi_rdma_ep_t *ep,
 
 	if (ofi_nccl_endpoint_share_ofi() != 0) {
 		assert(ofi_nccl_cq_per_endpoint() == 0);
-		if (dev_rail->ofi_ep == NULL) {
-			assert(dev_rail->av == NULL);
 
-			ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &dev_rail->ofi_ep,
-								&dev_rail->av, &ep_rail->cq);
-			if (ret != 0) {
-				return ret;
-			}
+		if (dev_rail->ofi_ep == NULL || ofi_nccl_eso_create_anyway() != 0) {
+			ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &ep_rail->ofi_ep,
+								&ep_rail->av, &ep_rail->cq);
 		}
 
-		ep_rail->ofi_ep = dev_rail->ofi_ep;
-		ep_rail->av = dev_rail->av;
+		if (dev_rail->ofi_ep == NULL) {
+			/* Use the newly returned endpoint/av as the device-shared endpoint */
+			dev_rail->ofi_ep = ep_rail->ofi_ep;
+			dev_rail->av = ep_rail->av;
+		} else {
+			/* Discard the newly returned endpoint/av in favor of the device-shared */
+			ep_rail->ofi_ep = dev_rail->ofi_ep;
+			ep_rail->av = dev_rail->av;
+		}
+
 	} else {
 		ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &ep_rail->ofi_ep,
 							&ep_rail->av, &ep_rail->cq);

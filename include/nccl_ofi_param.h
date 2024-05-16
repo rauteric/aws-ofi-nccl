@@ -227,6 +227,8 @@ OFI_NCCL_PARAM_INT(endpoint_per_communicator, "ENDPOINT_PER_COMM", 1);
  */
 OFI_NCCL_PARAM_INT(endpoint_share_ofi, "ENDPOINT_SHARE_OFI", 0);
 
+OFI_NCCL_PARAM_INT(eso_create_anyway, "ESO_CREATE_ANYWAY", 0);
+
 /*
  * If 0, create a Libfabric CQ per domain, even if Libfabric endpoints
  * are associated with communicators.  If non-zer, create a CQ per

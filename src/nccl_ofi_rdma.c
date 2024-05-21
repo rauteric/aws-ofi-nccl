@@ -24,6 +24,8 @@
 #include "nccl_ofi_memcheck.h"
 #include "nccl_ofi_ofiutils.h"
 
+#include "nccl_ofi_ep_addr_map.h"
+
 /* Template path used to write temporary NCCL topology file */
 static const char *topo_file_template = "/tmp/aws-ofi-nccl-topo-XXXXXX";
 /* Stores path to NCCL topology file written by ofi plugin for later unlinking */
@@ -3513,6 +3515,31 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	/* Allocate array of communicator rails */
 	r_comm->num_rails = num_rails;
 
+	/** TEST: call into ep_addr_map API **/
+	{
+		nccl_ofi_rdma_ep_name_t *remote_ep_name = &conn_msg->ep_names[0];
+		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(remote_ep_name);
+		if (ofi_nccl_endpoint_per_communicator() != 0) {
+			/* In this mode, we should only get NULL once, since remote ep is always unique */
+			static bool got_null_once = false;
+
+			if (!got_null_once) {
+				assert(ep_for_addr == NULL);
+				got_null_once = true;
+			} else {
+				assert(ep_for_addr != NULL);
+			}
+		} else {
+			/* In this mode, we should occasionally get NULL. But when we don't,
+			the ep we get out should be equal to our current one. */
+			NCCL_OFI_WARN("get_ep_for_addr returned: %p", ep_for_addr);
+			assert(ep_for_addr == NULL || ep_for_addr == &ep->base);
+		}
+
+		if (ep_for_addr == NULL)
+			nccl_ofi_insert_ep_for_addr(&ep->base, remote_ep_name);
+	}
+
 	/* Initialize local and remote endpoint resources for each rail */
 	for (int rail_id = 0; rail_id != num_rails; ++rail_id) {
 		nccl_net_ofi_rdma_recv_comm_rail_t *comm_rail = get_recv_comm_rail(r_comm, rail_id);
@@ -5469,6 +5496,9 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 		NCCL_OFI_WARN("Invalid device provided");
 		goto exit;
 	}
+
+	/* TEST delete map API */
+	nccl_ofi_delete_ep_for_addr(base_ep);
 
 	/* BWB: FIX me.  WOrk around a cleanup bug in the Libfabric
 	   code */

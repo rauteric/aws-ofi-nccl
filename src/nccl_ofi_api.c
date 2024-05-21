@@ -182,7 +182,7 @@ ncclResult_t nccl_net_ofi_listen(int dev_id, void *handle, void **lComm)
 	}
 
 	/* Retrieve and validate endpoint */
-	plugin->devs[dev_id]->get_ep(base_dev, &base_ep);
+	plugin->devs[dev_id]->get_ep(base_dev, &base_ep, true);
 	if (OFI_UNLIKELY(base_ep == NULL)) {
 		NCCL_OFI_WARN("Error accessing endpoint. Endpoint has not been initialized.");
 		return ncclInternalError;
@@ -275,7 +275,7 @@ ncclResult_t nccl_net_ofi_connect(int dev_id, void *handle, void **sComm)
 			return ncclInternalError;
 		}
 
-		ncclResult_t ret = base_dev->get_ep(base_dev, &base_ep);
+		ncclResult_t ret = base_dev->get_ep(base_dev, &base_ep, false);
 		if (OFI_UNLIKELY(ret != ncclSuccess)) {
 			return ret;
 		}

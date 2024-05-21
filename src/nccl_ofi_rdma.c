@@ -5527,7 +5527,8 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 }
 
 static int get_ep(nccl_net_ofi_device_t *base_dev,
-				    nccl_net_ofi_ep_t **base_ep)
+				    nccl_net_ofi_ep_t **base_ep,
+				    bool listen_ep)
 {
 	int ret = 0;
 
@@ -5545,7 +5546,7 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 
 	int ep_per_comm = ofi_nccl_endpoint_per_communicator();
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
-	if (ep_per_comm == 0) {
+	if (ep_per_comm == 0 || listen_ep) {
 		/* Obtain thread-local rdma endpoint. Allocate and
 		 * initialize endpoint if neccessary. */
 		ep = pthread_getspecific(device->ep_key);

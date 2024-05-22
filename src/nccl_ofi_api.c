@@ -275,7 +275,7 @@ ncclResult_t nccl_net_ofi_connect(int dev_id, void *handle, void **sComm)
 			return ncclInternalError;
 		}
 
-		ncclResult_t ret = base_dev->get_ep(base_dev, &base_ep, false);
+		ncclResult_t ret = base_dev->get_ep(base_dev, &base_ep, true);
 		if (OFI_UNLIKELY(ret != ncclSuccess)) {
 			return ret;
 		}

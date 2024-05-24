@@ -693,7 +693,6 @@ typedef struct nccl_net_ofi_rdma_device {
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[MAX_NUM_RAILS];
 #endif
-	int num_eps;
 } nccl_net_ofi_rdma_device_t;
 
 /*

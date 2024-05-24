@@ -5581,9 +5581,6 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 	if (!ep) {
 		int num_rails = device->num_rails;
 
-		device->num_eps++;
-		NCCL_OFI_WARN("Created %d unique eps", device->num_eps);
-
 		/* Allocate endpoint */
 		ep = calloc(1, sizeof(nccl_net_ofi_rdma_ep_t));
 		if (!ep) {

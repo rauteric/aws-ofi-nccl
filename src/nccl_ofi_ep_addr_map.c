@@ -44,7 +44,7 @@ static void print_addr(const char *fn, void *addr)
 
 nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(void *addr)
 {
-	print_addr("get_ep_for_addr", addr);
+	//print_addr("get_ep_for_addr", addr);
 	ep_pair_list_elem_t *ep_pair;
 
 	DL_FOREACH(ep_pair_list, ep_pair) {
@@ -69,7 +69,7 @@ nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(void *addr)
 
 void nccl_ofi_insert_ep_for_addr(nccl_net_ofi_ep_t *ep, void *addr) {
 
-	print_addr("nccl_ofi_insert_ep_for_addr", addr);
+	//print_addr("nccl_ofi_insert_ep_for_addr", addr);
 	hashed_addr_t *new_addr = malloc(sizeof(*new_addr));
 	if (!new_addr) abort();
 	memcpy(new_addr->addr, addr, MAX_EP_ADDR);

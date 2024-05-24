@@ -3512,13 +3512,13 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	if (ofi_nccl_endpoint_per_unique_src() == 1)
 	{
 		nccl_ofi_rdma_ep_name_t *remote_rail0_ep_name = &conn_msg->ep_names[0];
-		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(remote_rail0_ep_name);
+		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(device->ep_pair_list, remote_rail0_ep_name);
 		if (ep_for_addr == NULL) {
 			int r = device->base.get_ep(&device->base, &ep_for_addr, false);
 			if (r != 0) {
 				assert(false); abort();
 			}
-			nccl_ofi_insert_ep_for_addr(&ep->base, remote_rail0_ep_name);
+			nccl_ofi_insert_ep_for_addr(device->ep_pair_list, &ep->base, remote_rail0_ep_name);
 		}
 		ep = (nccl_net_ofi_rdma_ep_t *)ep_for_addr;
 		r_comm->base.base.ep = &ep->base;
@@ -6081,6 +6081,8 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 			ret = -ENOMEM;
 			goto error;
 		}
+
+		device->ep_pair_list = NULL;
 
 		/* Initialize libfabric resources of rdma device */
 		ret = device_prepare_for_connection(device);

@@ -23,26 +23,13 @@ typedef struct {
 	hashed_addr_t *addr_set;
 } pair_ep_addr_set_t;
 
-typedef struct ep_pair_list_elem {
+struct ep_pair_list_elem {
 	pair_ep_addr_set_t pair;
 	struct ep_pair_list_elem *prev;
 	struct ep_pair_list_elem *next;
-} ep_pair_list_elem_t;
+};
 
-static ep_pair_list_elem_t *ep_pair_list = NULL;
-
-static void print_addr(const char *fn, void *addr)
-{
-	char buf[56*2 + 1];
-	for (int i = 0; i < 56; ++i) {
-		// buf[2*i + 2] <= [2*56]
-		assert(2*i + 2 <= 2*56);
-		snprintf(buf + (2*i), 3, "%02hhx", ((char *)addr)[i]);
-	}
-	NCCL_OFI_WARN("Call %s addr: %s", fn, buf);
-}
-
-nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(void *addr)
+nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, void *addr)
 {
 	//print_addr("get_ep_for_addr", addr);
 	ep_pair_list_elem_t *ep_pair;
@@ -67,7 +54,7 @@ nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(void *addr)
 	return NULL;
 }
 
-void nccl_ofi_insert_ep_for_addr(nccl_net_ofi_ep_t *ep, void *addr) {
+void nccl_ofi_insert_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep, void *addr) {
 
 	//print_addr("nccl_ofi_insert_ep_for_addr", addr);
 	hashed_addr_t *new_addr = malloc(sizeof(*new_addr));
@@ -83,7 +70,7 @@ void nccl_ofi_insert_ep_for_addr(nccl_net_ofi_ep_t *ep, void *addr) {
 	DL_APPEND(ep_pair_list, new_pair);
 }
 
-void nccl_ofi_delete_ep_for_addr(nccl_net_ofi_ep_t *ep)
+void nccl_ofi_delete_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep)
 {
 	ep_pair_list_elem_t *ep_pair, *ep_pair_tmp;
 	DL_FOREACH_SAFE(ep_pair_list, ep_pair, ep_pair_tmp) {

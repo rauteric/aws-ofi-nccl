@@ -7,10 +7,13 @@
 
 #include "nccl_ofi.h"
 
-nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(void *addr);
+struct ep_pair_list_elem;
+typedef struct ep_pair_list_elem ep_pair_list_elem_t;
 
-void nccl_ofi_insert_ep_for_addr(nccl_net_ofi_ep_t *ep, void *addr);
+nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(struct ep_pair_list_elem *ep_pair_list, void *addr);
 
-void nccl_ofi_delete_ep_for_addr(nccl_net_ofi_ep_t *ep);
+void nccl_ofi_insert_ep_for_addr(struct ep_pair_list_elem *ep_pair_list, nccl_net_ofi_ep_t *ep, void *addr);
+
+void nccl_ofi_delete_ep_for_addr(struct ep_pair_list_elem *ep_pair_list, nccl_net_ofi_ep_t *ep);
 
 #endif

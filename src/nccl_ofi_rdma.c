@@ -5572,7 +5572,8 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 
 	int ep_per_comm = ofi_nccl_endpoint_per_communicator();
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
-	if (ep_per_comm == 0 || (ofi_nccl_endpoint_per_unique_src() != 0 && no_force_new_ep)) {
+	bool use_thread_local = (ep_per_comm == 0 || (ofi_nccl_endpoint_per_unique_src() != 0 && no_force_new_ep));
+	if (use_thread_local) {
 		/* Obtain thread-local rdma endpoint. Allocate and
 		 * initialize endpoint if neccessary. */
 		ep = pthread_getspecific(device->ep_key);
@@ -5606,8 +5607,10 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 		ep->bounce_buff_size = NCCL_OFI_MAX(NCCL_OFI_MAX(sizeof(nccl_net_ofi_rdma_ctrl_msg_t), eager_max_size),
 						    sizeof(nccl_ofi_rdma_connection_info_t));
 
-		/* Store endpoint in thread-local variable */
-		pthread_setspecific(device->ep_key, (void *)ep);
+		if (use_thread_local) {
+			/* Store endpoint in thread-local variable */
+			pthread_setspecific(device->ep_key, (void *)ep);
+		}
 
 		NCCL_OFI_TRACE(NCCL_NET, "RDMA endpoint %p for dev #%d is created",
 			       ep,

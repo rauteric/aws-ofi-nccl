@@ -267,7 +267,8 @@ struct nccl_net_ofi_device {
 	 * 		to create and configure the endpoint of the initializing thread.
 	 */
 	int (*get_ep)(nccl_net_ofi_device_t *base_dev,
-			       nccl_net_ofi_ep_t **ep);
+			       nccl_net_ofi_ep_t **ep,
+			       bool listen_ep);
 };
 
 /**

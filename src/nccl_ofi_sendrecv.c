@@ -2076,7 +2076,8 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 }
 
 static int get_ep(nccl_net_ofi_device_t *base_dev,
-				    nccl_net_ofi_ep_t **base_ep)
+				    nccl_net_ofi_ep_t **base_ep,
+				    bool __unused__)
 {
 	int ret = 0;
 

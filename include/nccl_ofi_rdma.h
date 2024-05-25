@@ -20,6 +20,7 @@ extern "C" {
 #include "nccl_ofi_freelist.h"
 #include "nccl_ofi_idpool.h"
 #include "nccl_ofi_tracepoint.h"
+#include "nccl_ofi_ep_addr_map.h"
 
 /* Maximum number of rails supported. This defines the size of
  * messages exchanged during connection establishment (linear
@@ -686,6 +687,9 @@ typedef struct nccl_net_ofi_rdma_device {
 
 	/* Memory registration key pool */
 	nccl_ofi_idpool_t key_pool;
+
+	/* List of endpoints and set of addresses they have connections to */
+	ep_pair_list_elem_t *ep_pair_list;
 
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[MAX_NUM_RAILS];

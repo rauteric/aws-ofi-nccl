@@ -233,7 +233,7 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 	nccl_net_ofi_device_t *device = (*plugin_p)->get_device(*plugin_p, 0);
 	nccl_net_ofi_ep_t *base_ep = NULL;
 
-	ret = device->get_ep(device, &base_ep);
+	ret = device->get_ep(device, &base_ep, true);
 	if (ret != 0) {
 		goto exit;
 	}

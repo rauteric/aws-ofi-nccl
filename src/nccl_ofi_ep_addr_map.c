@@ -29,6 +29,10 @@ struct ep_pair_list_elem {
 	struct ep_pair_list_elem *next;
 };
 
+/**
+ * Find endpoint in the list ep_pair_list that is not already connected to addr.
+ * If all endpoints are already connected to addr, return NULL.
+ */
 nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, void *addr)
 {
 	//print_addr("get_ep_for_addr", addr);
@@ -54,6 +58,9 @@ nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, v
 	return NULL;
 }
 
+/**
+ * Add ep to the list ep_pair_list, with a single connection to addr.
+ */
 void nccl_ofi_insert_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep, void *addr) {
 
 	//print_addr("nccl_ofi_insert_ep_for_addr", addr);
@@ -70,6 +77,9 @@ void nccl_ofi_insert_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi
 	DL_APPEND(ep_pair_list, new_pair);
 }
 
+/**
+ * Remove ep from the list ep_pair_list
+ */
 void nccl_ofi_delete_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep)
 {
 	ep_pair_list_elem_t *ep_pair, *ep_pair_tmp;

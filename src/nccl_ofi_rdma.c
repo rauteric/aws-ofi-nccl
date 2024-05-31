@@ -15,6 +15,7 @@
 #if HAVE_CUDA
 #include "nccl_ofi_cuda.h"
 #endif
+#include "nccl_ofi_ep_addr_map.h"
 #include "nccl_ofi_param.h"
 #include "nccl_ofi_rdma.h"
 #include "nccl_ofi_math.h"
@@ -3507,6 +3508,22 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	r_comm->remote_comm_id = conn_msg->local_comm_id;
 	r_comm->next_msg_seq_num = 0;
 
+	/* Find a comm to use, given the remote EP name */
+	if (ofi_nccl_endpoint_per_unique_src() == 1)
+	{
+		nccl_ofi_rdma_ep_name_t *remote_rail0_ep_name = &conn_msg->ep_names[0];
+		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(device->ep_pair_list, remote_rail0_ep_name);
+		if (ep_for_addr == NULL) {
+			int r = device->base.get_ep(&device->base, &ep_for_addr, false);
+			if (r != 0) {
+				assert(false); abort();
+			}
+			nccl_ofi_insert_ep_for_addr(device->ep_pair_list, &ep->base, remote_rail0_ep_name);
+		}
+		ep = (nccl_net_ofi_rdma_ep_t *)ep_for_addr;
+		r_comm->base.base.ep = &ep->base;
+	}
+
 	/* Add ourselves to ep's lookup array */
 	set_comm(ep, r_comm->local_comm_id, &r_comm->base.base);
 
@@ -3830,6 +3847,22 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		}
 		l_comm->r_comm = r_comm;
 
+		/* Just in case ep changed, reset it here */
+		ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
+
+		/*
+		 * The libfabric resources maintained by the endpoint
+		 * structure is passed from l_comm to r_comm so they can
+		 * then be used by nccl_net_ofi_irecv. We want to make
+		 * sure those resources are not freed up when we call
+		 * nccl_net_ofi_closeListen so we maintain an additional
+		 * refcnt and free it up when nccl_net_ofi_closeRecv is
+		 * called.
+		 */
+		pthread_mutex_lock(&(device->ep_lock));
+		ep->ref_cnt++;
+		pthread_mutex_unlock(&(device->ep_lock));
+
 		/* Reset request state for connect response message */
 		prepare_send_conn_resp_req(l_comm);
 
@@ -3850,6 +3883,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	case COMM_SEND_CONN:
 
 		/* COMM_SEND_CONN: Send connect response message to remote */
+		ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 		ret = post_send_conn_resp(r_comm, conn_msg, device, ep, req);
 		if (ret == -FI_EAGAIN) {
 			return 0;
@@ -3866,6 +3900,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		 * cleanup and return receive communicator. */
 
 		/* Progress our engine to get completions */
+		ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 		ret = ofi_process_cq(ep);
 		if (OFI_UNLIKELY(ret != 0)) {
 			goto exit;
@@ -3888,19 +3923,6 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		if (req_state != NCCL_OFI_RDMA_REQ_COMPLETED) {
 			return 0;
 		}
-
-		/*
-		 * The libfabric resources maintained by the endpoint
-		 * structure is passed from l_comm to r_comm so they can
-		 * then be used by nccl_net_ofi_irecv. We want to make
-		 * sure those resources are not freed up when we call
-		 * nccl_net_ofi_closeListen so we maintain an additional
-		 * refcnt and free it up when nccl_net_ofi_closeRecv is
-		 * called.
-		 */
-		pthread_mutex_lock(&(device->ep_lock));
-		ep->ref_cnt++;
-		pthread_mutex_unlock(&(device->ep_lock));
 
 		*recv_comm = &r_comm->base;
 
@@ -5497,6 +5519,10 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 	 * deallocation.
 	 */
 	if (ep->ref_cnt == 0) {
+
+		/* TODO remove ep from map */
+		assert(false); abort();
+
 		/* Ideally we would "un-post" the bounce buffers, but this
 		   should be accomplished by closing the endpoint. */
 		release_rdma_ep_resources(ep, device->base.dev_id);
@@ -5527,7 +5553,8 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 }
 
 static int get_ep(nccl_net_ofi_device_t *base_dev,
-				    nccl_net_ofi_ep_t **base_ep)
+				    nccl_net_ofi_ep_t **base_ep,
+				    bool no_force_new_ep)
 {
 	int ret = 0;
 
@@ -5545,7 +5572,8 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 
 	int ep_per_comm = ofi_nccl_endpoint_per_communicator();
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
-	if (ep_per_comm == 0) {
+	bool use_thread_local = (ep_per_comm == 0 || (ofi_nccl_endpoint_per_unique_src() != 0 && no_force_new_ep));
+	if (use_thread_local) {
 		/* Obtain thread-local rdma endpoint. Allocate and
 		 * initialize endpoint if neccessary. */
 		ep = pthread_getspecific(device->ep_key);
@@ -5576,8 +5604,10 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 		ep->bounce_buff_size = NCCL_OFI_MAX(NCCL_OFI_MAX(sizeof(nccl_net_ofi_rdma_ctrl_msg_t), eager_max_size),
 						    sizeof(nccl_ofi_rdma_connection_info_t));
 
-		/* Store endpoint in thread-local variable */
-		pthread_setspecific(device->ep_key, (void *)ep);
+		if (use_thread_local) {
+			/* Store endpoint in thread-local variable */
+			pthread_setspecific(device->ep_key, (void *)ep);
+		}
 
 		NCCL_OFI_TRACE(NCCL_NET, "RDMA endpoint %p for dev #%d is created",
 			       ep,
@@ -5758,6 +5788,47 @@ static void release_device_ofi_resources(nccl_net_ofi_rdma_device_t *device)
 	}
 }
 
+int get_rail_vf_idx(struct fi_info *info)
+{
+	char dev_name[256], guid_file[256], guid[20];
+	char *ptr, *endptr;
+	int vf_idx;
+	FILE *fp;
+
+	/* get ib device name and read GUID from sysfs */
+        strncpy(dev_name, info->domain_attr->name, sizeof(dev_name));
+	ptr = strstr(dev_name, "-rdm");
+	*ptr = '\0';
+
+	snprintf(guid_file, sizeof(guid_file), "/sys/class/infiniband/%s/node_guid", dev_name);
+	fp = fopen(guid_file, "r");
+	if (fp == NULL) {
+		NCCL_OFI_WARN("Error opening file");
+		return -1;
+	}
+
+	if (fgets(guid, sizeof(guid), fp) == NULL) {
+		NCCL_OFI_WARN("Error reading file");
+		fclose(fp);
+		return -1;
+	}
+	fclose(fp);
+
+	ptr = strrchr(guid, ':');
+	if (ptr == NULL) {
+		NCCL_OFI_WARN("Bad GUID format");
+		return -1;
+	}
+
+	vf_idx = (int)strtol(ptr + 1, &endptr, 10);
+	if (ptr + 1 == endptr) {
+		NCCL_OFI_WARN("Can't locate vf_idx in GUID");
+		return -1;
+	}
+
+	return vf_idx;
+}
+
 /*
  * @brief	Allocate device rail array and store duplicates of libfabric NIC info structs.
  *
@@ -5772,6 +5843,8 @@ static void release_device_ofi_resources(nccl_net_ofi_rdma_device_t *device)
 static nccl_net_ofi_rdma_device_rail_t *create_device_rail_array(struct fi_info *info_list,
 								 int num_infos)
 {
+	int rail_map[2] = {0, 2};
+
 	/* Allocate NIC info array */
 	nccl_net_ofi_rdma_device_rail_t *device_rails =
 		calloc(num_infos, sizeof(nccl_net_ofi_rdma_device_rail_t));
@@ -5780,19 +5853,33 @@ static nccl_net_ofi_rdma_device_rail_t *create_device_rail_array(struct fi_info 
 	}
 
 	for (int i = 0 ; i < num_infos ; i++) {
+		int vf_idx, rail_idx;
+
 		if (info_list == NULL) {
 			goto error;
 		}
 
+		vf_idx = get_rail_vf_idx(info_list);
+		if (vf_idx == -1) {
+			NCCL_OFI_WARN("vf_idx == -1");
+			abort();
+			rail_idx = i;
+		} else {
+			rail_idx = rail_map[vf_idx];
+			rail_map[vf_idx]++;
+		}
+
+		//NCCL_OFI_WARN("--- %p adding rail %s with vf idx %u rail_idx %u ---\n", device_rails, info_list->domain_attr->name, vf_idx, rail_idx); 
+
 		/* Duplicate NIC info */
-		device_rails[i].info = fi_dupinfo(info_list);
-		if (device_rails[i].info == NULL) {
+		device_rails[rail_idx].info = fi_dupinfo(info_list);
+		if (device_rails[rail_idx].info == NULL) {
 			goto error;
 		}
 		/* Libfabric documnetation is not clear if next is
 		 * copied or not with fi_dupinfo(), so assume the
 		 * worst */
-		device_rails[i].info->next = NULL;
+		device_rails[rail_idx].info->next = NULL;
 
 		info_list = info_list->next;
 	}
@@ -5907,6 +5994,12 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 		goto error;
 	}
 	eager_max_size = (size_t) ofi_nccl_eager_max_size();
+
+	if (ofi_nccl_endpoint_per_unique_src() != 0 && ofi_nccl_endpoint_per_communicator() == 0) {
+		NCCL_OFI_WARN("Cannot enable endpoint_per_unique_src without endpoint_per_communicator");
+		ret=-EINVAL;
+		goto error;
+	}
 
 	plugin = malloc(sizeof(nccl_net_ofi_plugin_t));
 	if (!plugin) {
@@ -6049,6 +6142,8 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 			ret = -ENOMEM;
 			goto error;
 		}
+
+		device->ep_pair_list = NULL;
 
 		/* Initialize libfabric resources of rdma device */
 		ret = device_prepare_for_connection(device);

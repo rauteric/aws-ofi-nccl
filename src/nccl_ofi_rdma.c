@@ -2146,6 +2146,15 @@ static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		return -EINVAL;
 	}
 
+	/**
+	 * In ENDPOINT_PER_UNIQUE_SRC config, the ep address in the handle is not
+	 * necessarily the same as the one in the connect response message. So,
+	 * make sure we re-initialize the first rail upon receiving the response msg.
+	 */
+	if (ofi_nccl_endpoint_per_unique_src() != 0) {
+		s_comm->num_init_rails = 0;
+	}
+
 	for (int rail_id = s_comm->num_init_rails; rail_id < s_comm->num_rails; ++rail_id) {
 		nccl_net_ofi_rdma_send_comm_rail_t *comm_rail = &s_comm->rails[rail_id];
 		nccl_net_ofi_ep_rail_t *ep_rail = &ep->rails[rail_id];

@@ -22,6 +22,8 @@ extern "C" {
 #include "nccl_ofi_tracepoint.h"
 #include "nccl_ofi_ep_addr_map.h"
 
+#include "contrib/uthash.h"
+
 /* Maximum number of rails supported. This defines the size of
  * messages exchanged during connection establishment (linear
  * scaling). The default is set to 4 to support 4 different rails per
@@ -625,6 +627,13 @@ typedef struct nccl_net_ofi_rdma_device_rail {
 	struct fid_cq *cq;
 } nccl_net_ofi_rdma_device_rail_t;
 
+typedef struct {
+	char addr[MAX_EP_ADDR];
+	nccl_net_ofi_comm_t *comm;
+	size_t cnt;
+	UT_hash_handle hh;
+} addr_hash_item_t;
+
 /*
  * @brief	RDMA Device
  *
@@ -693,6 +702,9 @@ typedef struct nccl_net_ofi_rdma_device {
 
 	/* List of endpoints and set of addresses they have connections to */
 	ep_pair_list_elem_t *ep_pair_list;
+
+	/* Device address send map */
+	addr_hash_item_t *addr_hash_map;
 
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[MAX_NUM_RAILS];

@@ -3512,13 +3512,13 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	if (ofi_nccl_endpoint_per_unique_src() == 1)
 	{
 		nccl_ofi_rdma_ep_name_t *remote_rail0_ep_name = &conn_msg->ep_names[0];
-		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(device->ep_pair_list, remote_rail0_ep_name);
+		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(device->ep_pair_list, &(remote_rail0_ep_name->ep_name));
 		if (ep_for_addr == NULL) {
 			int r = device->base.get_ep(&device->base, &ep_for_addr, false);
 			if (r != 0) {
 				assert(false); abort();
 			}
-			nccl_ofi_insert_ep_for_addr(device->ep_pair_list, &ep->base, remote_rail0_ep_name);
+			nccl_ofi_insert_ep_for_addr(device->ep_pair_list, &ep->base, &(remote_rail0_ep_name->ep_name));
 		}
 		ep = (nccl_net_ofi_rdma_ep_t *)ep_for_addr;
 		r_comm->base.base.ep = &ep->base;
@@ -4173,6 +4173,14 @@ static int insert_rdma_send_req_into_msgbuff(nccl_net_ofi_rdma_send_comm_t *s_co
 	return 0;
 }
 
+static void print_addr(char *buf, void *addr)
+{
+	for (int i = 0; i < 56; ++i) {
+		assert(2*i + 2 <= 2*56);
+		snprintf(buf + (2*i), 3, "%02hhx", ((char *)addr)[i]);
+	}
+}
+
 static int post_rdma_write(nccl_net_ofi_rdma_req_t *req,
 			   nccl_net_ofi_rdma_send_comm_rail_t *comm_rail,
 			   nccl_net_ofi_xfer_info_t *xfer_info)
@@ -4182,6 +4190,39 @@ static int post_rdma_write(nccl_net_ofi_rdma_req_t *req,
 	int rail_id = xfer_info->rail_id;
 	struct fid_mr *rail_mr_handle = send_data->buff_mr_handle->mr[rail_id];
 	void *desc = fi_mr_desc(rail_mr_handle);
+
+	if (rail_id == 0) {
+		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)req->comm->ep;
+		nccl_net_ofi_rdma_device_t *device = (nccl_net_ofi_rdma_device_t *)ep->base.device;
+		char dst_addr[MAX_EP_ADDR];
+		memset(&dst_addr, 0, sizeof(dst_addr));
+		size_t sz = MAX_EP_ADDR;
+		int r = fi_av_lookup(get_rail(ep, rail_id)->av, comm_rail->remote_addr,
+				     &dst_addr, &sz);
+		if (r < 0) abort();
+		size_t len = 128;
+		char str_addr_2[len];
+		fi_av_straddr(get_rail(ep, rail_id)->av, &dst_addr, str_addr_2, &len);
+
+		addr_hash_item_t *found_handle;
+		HASH_FIND(hh, device->addr_hash_map, &dst_addr, MAX_EP_ADDR, found_handle);
+		if (found_handle) {
+			if (found_handle->comm != req->comm) {
+				NCCL_OFI_WARN("Send addr %s comm %p does not match previous %p", str_addr_2, req->comm, found_handle->comm);
+				assert(false);
+			}
+			found_handle->cnt++;
+		} else {
+			found_handle = calloc(1, sizeof(*found_handle));
+			memcpy(found_handle->addr, &dst_addr, MAX_EP_ADDR);
+			found_handle->comm = req->comm;
+			found_handle->cnt = 1;
+			HASH_ADD(hh, device->addr_hash_map, addr, MAX_EP_ADDR, found_handle);
+
+			/* Printout */
+			NCCL_OFI_WARN("Device %p comm %p send to unique addr %s", device, req->comm, str_addr_2);
+		}
+	}
 
 	ssize_t rc;
 	/* Post RDMA write */
@@ -5054,6 +5095,8 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	}
 #endif
 	*s_comm = ret_s_comm;
+
+	NCCL_OFI_WARN("Created send_comm %p with ep %p", ret_s_comm, ret_s_comm->base.base.ep);
 	return ret;
 
 
@@ -5385,6 +5428,7 @@ static inline int set_local_address(struct fid_ep *ep, nccl_net_ofi_ep_rail_t *r
 	res = fi_getname(&ep->fid,
 			 (void *)rail->local_ep_name,
 			 &namelen);
+	memset((rail->local_ep_name)+namelen, 0, sizeof(rail->local_ep_name)-namelen);
 	if (res == -FI_ETOOSMALL) {
 		NCCL_OFI_WARN("Endpoint's address length (%d) is larger than supplied buffer length (%d)",
 			      namelen, MAX_EP_ADDR);
@@ -5435,6 +5479,13 @@ static int ep_rail_init(nccl_net_ofi_rdma_ep_t *ep,
 	if (ret != 0) {
 		ep_rail_release(ep_rail, dev_id);
 		return ret;
+	}
+
+	if (rail_id == 0) {
+		size_t len = 128;
+		char str_addr[len];
+		fi_av_straddr(ep_rail->av, &ep_rail->local_ep_name, str_addr, &len);
+		NCCL_OFI_WARN("ep %p rail0 address %s", ep, str_addr);
 	}
 
 	return 0;
@@ -6144,6 +6195,7 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 		}
 
 		device->ep_pair_list = NULL;
+		device->addr_hash_map = NULL;
 
 		/* Initialize libfabric resources of rdma device */
 		ret = device_prepare_for_connection(device);

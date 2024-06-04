@@ -7,13 +7,37 @@
 
 #include "nccl_ofi.h"
 
+/**
+ * A linked list of pairs of (ep, HashSet<addr>). The list should be stored in
+ * the calling code as a pointer to this struct, initialized to NULL.
+ */
 struct ep_pair_list_elem;
 typedef struct ep_pair_list_elem ep_pair_list_elem_t;
 
-nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(struct ep_pair_list_elem *ep_pair_list, void *addr);
+/**
+ * Find endpoint in the list ep_pair_list that is not already connected to addr.
+ * If all endpoints are already connected to addr, return NULL.
+ *
+ * @param ep_pair_list list of eps and addresses
+ * @param addr Libfabric address of size MAX_EP_ADDR
+ */
+nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, void *addr);
 
-void nccl_ofi_insert_ep_for_addr(struct ep_pair_list_elem *ep_pair_list, nccl_net_ofi_ep_t *ep, void *addr);
+/**
+ * Add ep to the list ep_pair_list, with a single connection to addr.
+ *
+ * @param ep_pair_list list of eps and addresses
+ * @param ep pointer to endpoint
+ * @param addr Libfabric address of size MAX_EP_ADDR
+ */
+void nccl_ofi_insert_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep, void *addr);
 
-void nccl_ofi_delete_ep_for_addr(struct ep_pair_list_elem *ep_pair_list, nccl_net_ofi_ep_t *ep);
+/**
+ * Remove ep from the list ep_pair_list, if present
+ *
+ * @param ep_pair_list list of eps and addresses
+ * @param ep pointer to endpoint
+ */
+void nccl_ofi_delete_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep);
 
 #endif

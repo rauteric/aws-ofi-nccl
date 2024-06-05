@@ -5662,40 +5662,45 @@ static void release_device_ofi_resources(nccl_net_ofi_rdma_device_t *device)
 
 int get_rail_vf_idx(struct fi_info *info)
 {
-	char dev_name[256], guid_file[256], guid[20];
+	char dev_name[224], guid_file[256], guid[20];
 	char *ptr, *endptr;
 	int vf_idx;
 	FILE *fp;
 
 	/* get ib device name and read GUID from sysfs */
-        strncpy(dev_name, info->domain_attr->name, sizeof(dev_name));
+	strncpy(dev_name, info->domain_attr->name, sizeof(dev_name)-1);
 	ptr = strstr(dev_name, "-rdm");
-	*ptr = '\0';
+	if (ptr) {
+		*ptr = '\0';
+	} else {
+		NCCL_OFI_WARN("dev_name %s did not match expected format", dev_name);
+		return -EINVAL;
+	}
 
 	snprintf(guid_file, sizeof(guid_file), "/sys/class/infiniband/%s/node_guid", dev_name);
 	fp = fopen(guid_file, "r");
 	if (fp == NULL) {
 		NCCL_OFI_WARN("Error opening file");
-		return -1;
+		return -EIO;
 	}
 
 	if (fgets(guid, sizeof(guid), fp) == NULL) {
 		NCCL_OFI_WARN("Error reading file");
 		fclose(fp);
-		return -1;
+		return -EIO;
 	}
 	fclose(fp);
 
 	ptr = strrchr(guid, ':');
 	if (ptr == NULL) {
 		NCCL_OFI_WARN("Bad GUID format");
-		return -1;
+		return -EINVAL;
 	}
 
 	vf_idx = (int)strtol(ptr + 1, &endptr, 10);
 	if (ptr + 1 == endptr) {
 		NCCL_OFI_WARN("Can't locate vf_idx in GUID");
-		return -1;
+		return -EINVAL;
 	}
 
 	return vf_idx;

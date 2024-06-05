@@ -32,21 +32,48 @@ typedef struct {
  * A linked list of pairs of (ep, HashSet<addr>). The list should be stored in
  * the calling code as a pointer to this struct.
  */
-struct ep_pair_list_elem {
+typedef struct ep_pair_list_elem {
 	pair_ep_addr_set_t pair;
 	struct ep_pair_list_elem *prev;
 	struct ep_pair_list_elem *next;
+} ep_pair_list_elem_t;
+
+/**
+ * Outer structure storing the ep list and a mutex to protect access
+ */
+struct ep_addr_list {
+	ep_pair_list_elem_t *ep_pair_list;
+	pthread_mutex_t mutex;
 };
 
-nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, void *addr)
+void nccl_ofi_init_ep_addr_list(ep_addr_list_t **list)
 {
-	ep_pair_list_elem_t *ep_pair;
+	ep_addr_list_t *ret_list = calloc(1, sizeof(*ret_list));
+	if (!ret_list) {
+		NCCL_OFI_WARN("Failed to allocate list");
+		abort();
+	}
+	ret_list->ep_pair_list = NULL;
 
-	DL_FOREACH(ep_pair_list, ep_pair) {
+	if (pthread_mutex_init(&ret_list->mutex, NULL) != 0) abort();
+
+	*list = ret_list;
+}
+
+nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_addr_list_t *ep_list, void *addr)
+{
+	/* TODO use wrapper in master once we update this branch */
+	if (pthread_mutex_lock(&ep_list->mutex) != 0) abort();
+
+	ep_pair_list_elem_t *ep_pair = NULL;
+
+	nccl_net_ofi_ep_t *ret_ep = NULL;
+
+	DL_FOREACH(ep_list->ep_pair_list, ep_pair) {
 		hashed_addr_t *found_handle;
 		HASH_FIND(hh, ep_pair->pair.addr_set, (char *)addr, MAX_EP_ADDR, found_handle);
 		if (found_handle) {
-			/* This ep already has a connection to the address, skip to next*/
+			/* This ep already has a connection to the address, skip to next */
 			continue;
 		} else {
 			/* We found an ep that is not connected to addr, so return it */
@@ -54,16 +81,22 @@ nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, v
 			if (!new_addr) abort();
 			memcpy(&new_addr->addr, addr, MAX_EP_ADDR);
 			HASH_ADD(hh, ep_pair->pair.addr_set, addr, MAX_EP_ADDR, new_addr);
-			return ep_pair->pair.ep;
+			ret_ep = ep_pair->pair.ep;
+			goto exit;
 		}
 	}
 
-	/* At this point, we haven't found an endpoint that isn't already connected
-	   to addr, so return NULL and let caller create a new one */
-	return NULL;
+exit:
+	/* TODO use wrapper in master once we update this branch */
+	if (pthread_mutex_unlock(&ep_list->mutex) != 0) abort();
+
+	return ret_ep;
 }
 
-void nccl_ofi_insert_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep, void *addr) {
+void nccl_ofi_insert_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep, void *addr)
+{
+	/* TODO use wrapper in master once we update this branch */
+	if (pthread_mutex_lock(&ep_list->mutex) != 0) abort();
 
 	hashed_addr_t *new_addr = malloc(sizeof(*new_addr));
 	if (!new_addr) abort();
@@ -75,13 +108,19 @@ void nccl_ofi_insert_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi
 	new_pair->pair.addr_set = NULL;
 	HASH_ADD(hh, new_pair->pair.addr_set, addr, MAX_EP_ADDR, new_addr);
 
-	DL_APPEND(ep_pair_list, new_pair);
+	DL_APPEND(ep_list->ep_pair_list, new_pair);
+
+	/* TODO use wrapper in master once we update this branch */
+	if (pthread_mutex_unlock(&ep_list->mutex) != 0) abort();
 }
 
-void nccl_ofi_delete_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi_ep_t *ep)
+void nccl_ofi_delete_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep)
 {
+	/* TODO use wrapper in master once we update this branch */
+	if (pthread_mutex_lock(&ep_list->mutex) != 0) abort();
+
 	ep_pair_list_elem_t *ep_pair, *ep_pair_tmp;
-	DL_FOREACH_SAFE(ep_pair_list, ep_pair, ep_pair_tmp) {
+	DL_FOREACH_SAFE(ep_list->ep_pair_list, ep_pair, ep_pair_tmp) {
 		if (ep_pair->pair.ep == ep) {
 			hashed_addr_t *e, *tmp;
 			/* Delete all addr entries in this ep's hashset */
@@ -89,9 +128,12 @@ void nccl_ofi_delete_ep_for_addr(ep_pair_list_elem_t *ep_pair_list, nccl_net_ofi
 				HASH_DEL(ep_pair->pair.addr_set, e);
 				free(e);
 			}
-			DL_DELETE(ep_pair_list, ep_pair);
+			DL_DELETE(ep_list->ep_pair_list, ep_pair);
 			free(ep_pair);
 			return;
 		}
 	}
+
+	/* TODO use wrapper in master once we update this branch */
+	if (pthread_mutex_unlock(&ep_list->mutex) != 0) abort();
 }

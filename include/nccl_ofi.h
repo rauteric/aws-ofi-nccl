@@ -278,10 +278,16 @@ struct nccl_net_ofi_device {
 	 * 		During the plugin initialization, this function will be 
 	 * 		called once per process using one of the instantiated device structs
 	 * 		to create and configure the endpoint of the initializing thread.
+	 *
+	 * @param use_thread_local_ep
+	 * 	- if true, and if ep_per_unique_src=1, the thread-local endpoint
+	 * 	  will be used if available, and updated if not
+	 * 	- if false, a new endpoint will always be created, and the
+	 *        thread-local ep reference will not be updated
 	 */
 	int (*get_ep)(nccl_net_ofi_device_t *base_dev,
 			       nccl_net_ofi_ep_t **ep,
-			       bool listen_ep);
+			       bool use_thread_local_ep);
 };
 
 /**

@@ -5738,8 +5738,6 @@ static nccl_net_ofi_rdma_device_rail_t *create_device_rail_array(struct fi_info 
 
 		vf_idx = get_rail_vf_idx(info_list);
 		if (vf_idx == -1) {
-			NCCL_OFI_WARN("vf_idx == -1");
-			abort();
 			rail_idx = i;
 		} else {
 			rail_idx = rail_map[vf_idx];

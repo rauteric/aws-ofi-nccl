@@ -5426,7 +5426,7 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 
 static int get_ep(nccl_net_ofi_device_t *base_dev,
 				    nccl_net_ofi_ep_t **base_ep,
-				    bool no_force_new_ep)
+				    bool use_thread_local_ep)
 {
 	int ret = 0;
 
@@ -5442,9 +5442,10 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 	/* Obtain lock */
 	nccl_net_ofi_mutex_lock(&device->ep_lock);
 
-	int ep_per_comm = ofi_nccl_endpoint_per_communicator();
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
-	bool use_thread_local = (ep_per_comm == 0 || (ofi_nccl_endpoint_per_unique_src() != 0 && no_force_new_ep));
+	bool use_thread_local = ( ofi_nccl_endpoint_per_communicator() == 0 ||
+		(ofi_nccl_endpoint_per_unique_src() != 0 && use_thread_local_ep)
+		);
 	if (use_thread_local) {
 		/* Obtain thread-local rdma endpoint. Allocate and
 		 * initialize endpoint if neccessary. */

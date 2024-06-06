@@ -7,6 +7,7 @@
 #include "nccl_ofi.h"
 
 #include "nccl_ofi_ep_addr_map.h"
+#include "nccl_ofi_pthread.h"
 
 #include "contrib/uthash.h"
 #include "contrib/utlist.h"
@@ -55,15 +56,17 @@ void nccl_ofi_init_ep_addr_list(ep_addr_list_t **list)
 	}
 	ret_list->ep_pair_list = NULL;
 
-	if (pthread_mutex_init(&ret_list->mutex, NULL) != 0) abort();
+	if (nccl_net_ofi_mutex_init(&ret_list->mutex, NULL) != 0) {
+		NCCL_OFI_WARN("Failed to init mutex");
+		abort();
+	}
 
 	*list = ret_list;
 }
 
 nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_addr_list_t *ep_list, void *addr)
 {
-	/* TODO use wrapper in master once we update this branch */
-	if (pthread_mutex_lock(&ep_list->mutex) != 0) abort();
+	nccl_net_ofi_mutex_lock(&ep_list->mutex);
 
 	ep_pair_list_elem_t *ep_pair = NULL;
 
@@ -87,16 +90,14 @@ nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_addr_list_t *ep_list, void *addr)
 	}
 
 exit:
-	/* TODO use wrapper in master once we update this branch */
-	if (pthread_mutex_unlock(&ep_list->mutex) != 0) abort();
+	nccl_net_ofi_mutex_unlock(&ep_list->mutex);
 
 	return ret_ep;
 }
 
 void nccl_ofi_insert_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep, void *addr)
 {
-	/* TODO use wrapper in master once we update this branch */
-	if (pthread_mutex_lock(&ep_list->mutex) != 0) abort();
+	nccl_net_ofi_mutex_lock(&ep_list->mutex);
 
 	hashed_addr_t *new_addr = malloc(sizeof(*new_addr));
 	if (!new_addr) abort();
@@ -110,14 +111,12 @@ void nccl_ofi_insert_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep,
 
 	DL_APPEND(ep_list->ep_pair_list, new_pair);
 
-	/* TODO use wrapper in master once we update this branch */
-	if (pthread_mutex_unlock(&ep_list->mutex) != 0) abort();
+	nccl_net_ofi_mutex_unlock(&ep_list->mutex);
 }
 
 void nccl_ofi_delete_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep)
 {
-	/* TODO use wrapper in master once we update this branch */
-	if (pthread_mutex_lock(&ep_list->mutex) != 0) abort();
+	nccl_net_ofi_mutex_lock(&ep_list->mutex);
 
 	ep_pair_list_elem_t *ep_pair, *ep_pair_tmp;
 	DL_FOREACH_SAFE(ep_list->ep_pair_list, ep_pair, ep_pair_tmp) {
@@ -134,6 +133,5 @@ void nccl_ofi_delete_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep)
 		}
 	}
 
-	/* TODO use wrapper in master once we update this branch */
-	if (pthread_mutex_unlock(&ep_list->mutex) != 0) abort();
+	nccl_net_ofi_mutex_unlock(&ep_list->mutex);
 }

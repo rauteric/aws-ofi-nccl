@@ -6,7 +6,7 @@
 
 #include "nccl_ofi.h"
 
-#include "nccl_ofi_ep_addr_map.h"
+#include "nccl_ofi_ep_addr_list.h"
 #include "nccl_ofi_pthread.h"
 
 #include "contrib/uthash.h"

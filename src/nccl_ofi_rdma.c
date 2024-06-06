@@ -1663,6 +1663,7 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 			} else if (ret == -FI_ECANCELED) {
 				/* Non-fatal cancellation event -- continue
 				   processing cq */
+				ret = 0;
 				continue;
 			} else {
 				goto exit;
@@ -3746,6 +3747,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		/* Progress NCCL OFI engine so that connection is accepted */
 		ret = ofi_process_cq(ep);
 		if (OFI_UNLIKELY(ret != 0)) {
+			NCCL_OFI_WARN("Failure to process cq: RC %d", ret);
 			goto exit;
 		}
 
@@ -3771,6 +3773,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		/* Prepare receive communicator object for the received peer connection */
 		r_comm = prepare_recv_comm(device, ep, conn_msg);
 		if (OFI_UNLIKELY(r_comm == NULL)) {
+			NCCL_OFI_WARN("Failed to prepare recv comm");
 			ret = -EINVAL;
 			goto exit;
 		}

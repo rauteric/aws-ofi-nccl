@@ -5501,10 +5501,6 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 		goto exit;
 	}
 
-	/* BWB: FIX me.  WOrk around a cleanup bug in the Libfabric
-	   code */
-	return 0;
-
 	pthread_mutex_lock(&device->ep_lock);
 
 	/* Decrease reference counter of endpoint. */
@@ -5529,8 +5525,7 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 	 */
 	if (ep->ref_cnt == 0) {
 
-		/* TODO remove ep from map */
-		assert(false); abort();
+		nccl_ofi_delete_ep_for_addr(device->ep_addr_list, &ep->base);
 
 		/* Ideally we would "un-post" the bounce buffers, but this
 		   should be accomplished by closing the endpoint. */

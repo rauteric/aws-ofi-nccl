@@ -1515,6 +1515,22 @@ static inline int process_err_completion(nccl_net_ofi_rdma_device_t *device,
 		goto exit;
 	}
 
+	if (err_entry.err == FI_ECANCELED) {
+		/* These errors occur when an endpoint is closed with pending operations.
+		   We currently expect these errors for receive ops, since we don't
+		   cancel pending receive buffers before closing the endpoint. */
+		req = err_entry.op_context;
+		if (req == NULL || req->type != NCCL_OFI_RDMA_BOUNCE) {
+			NCCL_OFI_WARN("Received canceled event from unexpected request type. Type: %s",
+				nccl_net_ofi_req_str(req));
+			ret = -EIO;
+			goto exit;
+		}
+		NCCL_OFI_TRACE(NCCL_NET, "Processed canceled event for bounce request %p", req);
+		ret = -err_entry.err;
+		goto exit;
+	}
+
 	if (err_entry.flags & FI_REMOTE_WRITE) {
 		req = get_req_from_imm_data(device, err_entry.data);
 		if (!req) {
@@ -1678,11 +1694,17 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 				goto exit;
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
 			ret = process_err_completion(get_device_from_ep(ep), rail->cq);
-			if (ret == 0)
+			if (ret == 0) {
 				/* Error entry not available yet */
 				break;
-			else
+			} else if (ret == -FI_ECANCELED) {
+				/* Non-fatal cancellation event -- continue
+				   processing cq */
+				ret = 0;
+				continue;
+			} else {
 				goto exit;
+			}
 		} else if (rc == -FI_EAGAIN) {
 			/* No completions to process */
 			break;
@@ -3736,6 +3758,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		/* Progress NCCL OFI engine so that connection is accepted */
 		ret = ofi_process_cq(ep);
 		if (OFI_UNLIKELY(ret != 0)) {
+			NCCL_OFI_WARN("Failure to process cq: RC %d", ret);
 			goto exit;
 		}
 
@@ -3761,6 +3784,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		/* Prepare receive communicator object for the received peer connection */
 		r_comm = prepare_recv_comm(device, ep, conn_msg);
 		if (OFI_UNLIKELY(r_comm == NULL)) {
+			NCCL_OFI_WARN("Failed to prepare recv comm");
 			ret = -EINVAL;
 			goto exit;
 		}

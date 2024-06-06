@@ -49,16 +49,19 @@ struct ep_addr_list {
 
 void nccl_ofi_init_ep_addr_list(ep_addr_list_t **list)
 {
+	*list = NULL;
+
 	ep_addr_list_t *ret_list = calloc(1, sizeof(*ret_list));
 	if (!ret_list) {
 		NCCL_OFI_WARN("Failed to allocate list");
-		abort();
+		return;
 	}
 	ret_list->ep_pair_list = NULL;
 
 	if (nccl_net_ofi_mutex_init(&ret_list->mutex, NULL) != 0) {
 		NCCL_OFI_WARN("Failed to init mutex");
-		abort();
+		free(ret_list);
+		return;
 	}
 
 	*list = ret_list;
@@ -81,7 +84,10 @@ nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_addr_list_t *ep_list, void *addr)
 		} else {
 			/* We found an ep that is not connected to addr, so return it */
 			hashed_addr_t *new_addr = malloc(sizeof(hashed_addr_t));
-			if (!new_addr) abort();
+			if (!new_addr) {
+				NCCL_OFI_WARN("Failed to allocate new address");
+				abort();
+			}
 			memcpy(&new_addr->addr, addr, MAX_EP_ADDR);
 			HASH_ADD(hh, ep_pair->pair.addr_set, addr, MAX_EP_ADDR, new_addr);
 			ret_ep = ep_pair->pair.ep;
@@ -100,11 +106,17 @@ void nccl_ofi_insert_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep,
 	nccl_net_ofi_mutex_lock(&ep_list->mutex);
 
 	hashed_addr_t *new_addr = malloc(sizeof(*new_addr));
-	if (!new_addr) abort();
+	if (!new_addr) {
+		NCCL_OFI_WARN("Failed to allocate new address");
+		abort();
+	}
 	memcpy(new_addr->addr, addr, MAX_EP_ADDR);
 
 	ep_pair_list_elem_t *new_pair = malloc(sizeof(*new_pair));
-	if (!new_pair) abort();
+	if (!new_pair) {
+		NCCL_OFI_WARN("Failed to allocate new ep list element");
+		abort();
+	}
 	new_pair->pair.ep = ep;
 	new_pair->pair.addr_set = NULL;
 	HASH_ADD(hh, new_pair->pair.addr_set, addr, MAX_EP_ADDR, new_addr);
@@ -114,6 +126,18 @@ void nccl_ofi_insert_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep,
 	nccl_net_ofi_mutex_unlock(&ep_list->mutex);
 }
 
+static void delete_ep_list_entry(ep_pair_list_elem_t *ep_pair_list, ep_pair_list_elem_t *elem)
+{
+	hashed_addr_t *e, *tmp;
+	/* Delete all addr entries in this ep's hashset */
+	HASH_ITER(hh, elem->pair.addr_set, e, tmp) {
+		HASH_DEL(elem->pair.addr_set, e);
+		free(e);
+	}
+	DL_DELETE(ep_pair_list, elem);
+	free(elem);
+}
+
 void nccl_ofi_delete_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep)
 {
 	nccl_net_ofi_mutex_lock(&ep_list->mutex);
@@ -121,17 +145,11 @@ void nccl_ofi_delete_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep)
 	ep_pair_list_elem_t *ep_pair, *ep_pair_tmp;
 	DL_FOREACH_SAFE(ep_list->ep_pair_list, ep_pair, ep_pair_tmp) {
 		if (ep_pair->pair.ep == ep) {
-			hashed_addr_t *e, *tmp;
-			/* Delete all addr entries in this ep's hashset */
-			HASH_ITER(hh, ep_pair->pair.addr_set, e, tmp) {
-				HASH_DEL(ep_pair->pair.addr_set, e);
-				free(e);
-			}
-			DL_DELETE(ep_list->ep_pair_list, ep_pair);
-			free(ep_pair);
-			return;
+			delete_ep_list_entry(ep_list->ep_pair_list, ep_pair);
+			goto exit;
 		}
 	}
 
+exit:
 	nccl_net_ofi_mutex_unlock(&ep_list->mutex);
 }

@@ -1479,6 +1479,22 @@ static inline int process_err_completion(nccl_net_ofi_rdma_ep_t *ep,
 		goto exit;
 	}
 
+	if (err_entry.err == FI_ECANCELED) {
+		/* These errors occur when an endpoint is closed with pending operations.
+		   We currently expect these errors for receive ops, since we don't
+		   cancel pending receive buffers before closing the endpoint. */
+		req = err_entry.op_context;
+		if (req == NULL || req->type != NCCL_OFI_RDMA_BOUNCE) {
+			NCCL_OFI_WARN("Received canceled event from unexpected request type. Type: %s",
+				nccl_net_ofi_req_str(req));
+			ret = -EIO;
+			goto exit;
+		}
+		NCCL_OFI_TRACE(NCCL_NET, "Processed canceled event for bounce request %p", req);
+		ret = -err_entry.err;
+		goto exit;
+	}
+
 	if (err_entry.flags & FI_REMOTE_WRITE) {
 		req = get_req_from_imm_data(ep, err_entry.data);
 		if (!req) {
@@ -1642,11 +1658,16 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 				goto exit;
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
 			ret = process_err_completion(ep, rail);
-			if (ret == 0)
+			if (ret == 0) {
 				/* Error entry not available yet */
 				break;
-			else
+			} else if (ret == -FI_ECANCELED) {
+				/* Non-fatal cancellation event -- continue
+				   processing cq */
+				continue;
+			} else {
 				goto exit;
+			}
 		} else if (rc == -FI_EAGAIN) {
 			/* No completions to process */
 			break;
@@ -5393,6 +5414,7 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 	 */
 	if (ep->ref_cnt == 0) {
 
+		/** TODO but only under ep-per-unique-src **/
 		nccl_ofi_delete_ep_for_addr(device->ep_addr_list, &ep->base);
 
 		/* Ideally we would "un-post" the bounce buffers, but this
@@ -5411,6 +5433,8 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 		}
 		free(ep->rails);
 		ep->rails = NULL;
+
+		/** TODO with ep-per-unique-src, we're still leaking ep sometimes **/
 	}
 
  unlock:

@@ -50,4 +50,4 @@ noinst_HEADERS = \
 	nccl-headers/neuron/error.h \
 	contrib/uthash.h \
 	contrib/utlist.h \
-	nccl_ofi_ep_addr_map.h
+	nccl_ofi_ep_addr_list.h

@@ -20,7 +20,7 @@ extern "C" {
 #include "nccl_ofi_freelist.h"
 #include "nccl_ofi_idpool.h"
 #include "nccl_ofi_tracepoint.h"
-#include "nccl_ofi_ep_addr_map.h"
+#include "nccl_ofi_ep_addr_list.h"
 
 /* Maximum number of rails supported. This defines the size of
  * messages exchanged during connection establishment (linear

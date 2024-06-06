@@ -2,8 +2,8 @@
  * Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All rights reserved.
  */
 
-#ifndef NCCL_OFI_EP_ADDR_MAP_H
-#define NCCL_OFI_EP_ADDR_MAP_H
+#ifndef NCCL_OFI_EP_ADDR_LIST_H
+#define NCCL_OFI_EP_ADDR_LIST_H
 
 #include "nccl_ofi.h"
 

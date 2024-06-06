@@ -15,7 +15,7 @@
 #if HAVE_CUDA
 #include "nccl_ofi_cuda.h"
 #endif
-#include "nccl_ofi_ep_addr_map.h"
+#include "nccl_ofi_ep_addr_list.h"
 #include "nccl_ofi_param.h"
 #include "nccl_ofi_rdma.h"
 #include "nccl_ofi_math.h"

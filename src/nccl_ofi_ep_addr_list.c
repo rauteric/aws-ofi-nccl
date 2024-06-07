@@ -42,16 +42,16 @@ typedef struct ep_pair_list_elem {
 /**
  * Outer structure storing the ep list and a mutex to protect access
  */
-struct ep_addr_list {
+struct nccl_ofi_ep_addr_list {
 	ep_pair_list_elem_t *ep_pair_list;
 	pthread_mutex_t mutex;
 };
 
-void nccl_ofi_init_ep_addr_list(ep_addr_list_t **list)
+void nccl_ofi_init_ep_addr_list(nccl_ofi_ep_addr_list_t **list)
 {
 	*list = NULL;
 
-	ep_addr_list_t *ret_list = calloc(1, sizeof(*ret_list));
+	nccl_ofi_ep_addr_list_t *ret_list = calloc(1, sizeof(*ret_list));
 	if (!ret_list) {
 		NCCL_OFI_WARN("Failed to allocate list");
 		return;
@@ -67,7 +67,7 @@ void nccl_ofi_init_ep_addr_list(ep_addr_list_t **list)
 	*list = ret_list;
 }
 
-nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(ep_addr_list_t *ep_list, void *addr)
+nccl_net_ofi_ep_t *nccl_ofi_get_ep_for_addr(nccl_ofi_ep_addr_list_t *ep_list, void *addr)
 {
 	nccl_net_ofi_mutex_lock(&ep_list->mutex);
 
@@ -101,7 +101,7 @@ exit:
 	return ret_ep;
 }
 
-void nccl_ofi_insert_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep, void *addr)
+void nccl_ofi_insert_ep_for_addr(nccl_ofi_ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep, void *addr)
 {
 	nccl_net_ofi_mutex_lock(&ep_list->mutex);
 
@@ -138,7 +138,7 @@ static void delete_ep_list_entry(ep_pair_list_elem_t *ep_pair_list, ep_pair_list
 	free(elem);
 }
 
-void nccl_ofi_delete_ep_for_addr(ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep)
+void nccl_ofi_delete_ep_for_addr(nccl_ofi_ep_addr_list_t *ep_list, nccl_net_ofi_ep_t *ep)
 {
 	nccl_net_ofi_mutex_lock(&ep_list->mutex);
 

@@ -5740,6 +5740,52 @@ static void release_device_ofi_resources(nccl_net_ofi_rdma_device_t *device)
 	}
 }
 
+int get_rail_vf_idx(struct fi_info *info)
+{
+	char dev_name[224], guid_file[256], guid[20];
+	char *ptr, *endptr;
+	int vf_idx;
+	FILE *fp;
+
+	/* get ib device name and read GUID from sysfs */
+	strncpy(dev_name, info->domain_attr->name, sizeof(dev_name)-1);
+	ptr = strstr(dev_name, "-rdm");
+	if (ptr) {
+		*ptr = '\0';
+	} else {
+		NCCL_OFI_WARN("dev_name %s did not match expected format", dev_name);
+		return -EINVAL;
+	}
+
+	snprintf(guid_file, sizeof(guid_file), "/sys/class/infiniband/%s/node_guid", dev_name);
+	fp = fopen(guid_file, "r");
+	if (fp == NULL) {
+		NCCL_OFI_WARN("Error opening file");
+		return -EIO;
+	}
+
+	if (fgets(guid, sizeof(guid), fp) == NULL) {
+		NCCL_OFI_WARN("Error reading file");
+		fclose(fp);
+		return -EIO;
+	}
+	fclose(fp);
+
+	ptr = strrchr(guid, ':');
+	if (ptr == NULL) {
+		NCCL_OFI_WARN("Bad GUID format");
+		return -EINVAL;
+	}
+
+	vf_idx = (int)strtol(ptr + 3, &endptr, 10);
+	if (ptr + 1 == endptr) {
+		NCCL_OFI_WARN("Can't locate vf_idx in GUID");
+		return -EINVAL;
+	}
+
+	return vf_idx;
+}
+
 /*
  * @brief	Allocate device rail array and store duplicates of libfabric NIC info structs.
  *
@@ -5754,6 +5800,8 @@ static void release_device_ofi_resources(nccl_net_ofi_rdma_device_t *device)
 static nccl_net_ofi_rdma_device_rail_t *create_device_rail_array(struct fi_info *info_list,
 								 int num_infos)
 {
+	int rail_map[2] = {0, 2};
+
 	/* Allocate NIC info array */
 	nccl_net_ofi_rdma_device_rail_t *device_rails =
 		calloc(num_infos, sizeof(nccl_net_ofi_rdma_device_rail_t));
@@ -5762,19 +5810,29 @@ static nccl_net_ofi_rdma_device_rail_t *create_device_rail_array(struct fi_info 
 	}
 
 	for (int i = 0 ; i < num_infos ; i++) {
+		int vf_idx, rail_idx;
+
 		if (info_list == NULL) {
 			goto error;
 		}
 
+		vf_idx = get_rail_vf_idx(info_list);
+		if (vf_idx == -1) {
+			rail_idx = i;
+		} else {
+			rail_idx = rail_map[vf_idx];
+			rail_map[vf_idx]++;
+		}
+
 		/* Duplicate NIC info */
-		device_rails[i].info = fi_dupinfo(info_list);
-		if (device_rails[i].info == NULL) {
+		device_rails[rail_idx].info = fi_dupinfo(info_list);
+		if (device_rails[rail_idx].info == NULL) {
 			goto error;
 		}
 		/* Libfabric documnetation is not clear if next is
 		 * copied or not with fi_dupinfo(), so assume the
 		 * worst */
-		device_rails[i].info->next = NULL;
+		device_rails[rail_idx].info->next = NULL;
 
 		info_list = info_list->next;
 	}

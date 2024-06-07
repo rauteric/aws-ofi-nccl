@@ -5234,11 +5234,10 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 
 static void ep_rail_release(nccl_net_ofi_ep_rail_t *rail, int dev_id)
 {
-
-	if (ofi_nccl_cq_per_endpoint() == 0) {
-		/* when using a cq per domain (instead of a cq per
-		endpoint), set the rail->cq pointer to NULL here so
-		that the cq isn't actually released in ep_release().
+	if (ofi_nccl_endpoint_per_communicator() != 0) {
+		/* when using an endpoint per communicator with a shared cq
+		(instead of a cq per endpoint), set the rail->cq pointer to NULL
+		here so	that the cq isn't actually released in ep_release().
 		The cq will be released when the domain is cleaned up
 		(which it currently never is, because there's no
 		plugin fini() function */
@@ -5316,8 +5315,7 @@ static int ep_rail_init(nccl_net_ofi_rdma_ep_t *ep,
 
 	ep_rail->cq = dev_rail->cq;
 
-	assert(ofi_nccl_cq_per_endpoint() == 0 ? dev_rail->cq != NULL :
-	       dev_rail->cq == NULL);
+	assert(ep_rail->cq != NULL);
 
 	ret = nccl_ofi_ofiutils_init_connection(FI_VERSION(1, 18), dev_rail->info, dev_rail->domain, &ep_rail->ofi_ep,
 						&ep_rail->av, &ep_rail->cq);
@@ -5582,18 +5580,13 @@ static int init_device_rail_ofi_resources(nccl_net_ofi_rdma_device_rail_t *rail_
 		}
 	}
 
-	if (ofi_nccl_cq_per_endpoint() != 0) {
-		/* In this mode, set cq to NULL, so a cq will be created
-		   separately for each endpoint */
-		rail_dev->cq = NULL;
-	} else {
-		cq_attr.format = FI_CQ_FORMAT_DATA;
-		ret = fi_cq_open(rail_dev->domain, &cq_attr, &rail_dev->cq, NULL);
-		if (OFI_UNLIKELY(ret != 0)) {
-			NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
-				      ret, fi_strerror(-ret));
-			goto error;
-		}
+	/* Create device-shared completion queue */
+	cq_attr.format = FI_CQ_FORMAT_DATA;
+	ret = fi_cq_open(rail_dev->domain, &cq_attr, &rail_dev->cq, NULL);
+	if (OFI_UNLIKELY(ret != 0)) {
+		NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
+				ret, fi_strerror(-ret));
+		goto error;
 	}
 
 	return ret;

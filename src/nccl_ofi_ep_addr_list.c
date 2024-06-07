@@ -49,21 +49,26 @@ struct nccl_ofi_ep_addr_list {
 
 void nccl_ofi_init_ep_addr_list(nccl_ofi_ep_addr_list_t **list)
 {
-	*list = NULL;
-
 	nccl_ofi_ep_addr_list_t *ret_list = calloc(1, sizeof(*ret_list));
 	if (!ret_list) {
 		NCCL_OFI_WARN("Failed to allocate list");
-		return;
+		goto error;
 	}
+
 	ret_list->ep_pair_list = NULL;
 
 	if (nccl_net_ofi_mutex_init(&ret_list->mutex, NULL) != 0) {
 		NCCL_OFI_WARN("Failed to init mutex");
-		free(ret_list);
-		return;
+		goto error;
 	}
 
+	goto exit;
+
+error:
+	if (ret_list) free(ret_list);
+	ret_list = NULL;
+
+exit:
 	*list = ret_list;
 }
 

@@ -6042,6 +6042,11 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 		}
 
 		nccl_ofi_init_ep_addr_list(&device->ep_addr_list);
+		if (!device->ep_addr_list) {
+			NCCL_OFI_WARN("Failed to init ep addr list");
+			ret = -ENOMEM;
+			goto error;
+		}
 
 		/* Initialize libfabric resources of rdma device */
 		ret = device_prepare_for_connection(device);

@@ -2083,11 +2083,11 @@ static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 	}
 
 	/**
-	 * In ENDPOINT_PER_UNIQUE_SRC config, the ep address in the handle is not
+	 * In ENDPOINT_PER_COMM config, the ep address in the handle is not
 	 * necessarily the same as the one in the connect response message. So,
 	 * make sure we re-initialize the first rail upon receiving the response msg.
 	 */
-	if (ofi_nccl_endpoint_per_unique_src() != 0) {
+	if (ofi_nccl_endpoint_per_communicator() != 0) {
 		s_comm->num_init_rails = 0;
 	}
 
@@ -3443,7 +3443,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	r_comm->next_msg_seq_num = 0;
 
 	/* Find a comm to use, given the remote EP name */
-	if (ofi_nccl_endpoint_per_unique_src() == 1)
+	if (ofi_nccl_endpoint_per_communicator() == 1)
 	{
 		nccl_ofi_rdma_ep_name_t *remote_rail0_ep_name = &conn_msg->ep_names[0];
 		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(device->ep_addr_list, remote_rail0_ep_name);
@@ -5462,8 +5462,7 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
 	bool use_thread_local = ( ofi_nccl_endpoint_per_communicator() == 0 ||
-		(ofi_nccl_endpoint_per_unique_src() != 0 && use_thread_local_ep)
-		);
+		use_thread_local_ep );
 	if (use_thread_local) {
 		/* Obtain thread-local rdma endpoint. Allocate and
 		 * initialize endpoint if neccessary. */
@@ -5888,12 +5887,6 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 		goto error;
 	}
 	eager_max_size = (size_t) ofi_nccl_eager_max_size();
-
-	if (ofi_nccl_endpoint_per_unique_src() != 0 && ofi_nccl_endpoint_per_communicator() == 0) {
-		NCCL_OFI_WARN("Cannot enable endpoint_per_unique_src without endpoint_per_communicator");
-		ret=-EINVAL;
-		goto error;
-	}
 
 	plugin = malloc(sizeof(nccl_net_ofi_plugin_t));
 	if (!plugin) {

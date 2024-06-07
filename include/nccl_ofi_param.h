@@ -242,11 +242,6 @@ OFI_NCCL_PARAM_INT(endpoint_per_communicator, "ENDPOINT_PER_COMM", 1);
  */
 OFI_NCCL_PARAM_INT(cq_per_endpoint, "CQ_PER_ENDPOINT", 0);
 
-/*
- * If non-0, only create unique recv-side endpoints for same src endpoint
- */
-OFI_NCCL_PARAM_INT(endpoint_per_unique_src, "ENDPOINT_PER_UNIQUE_SRC", 0);
-
 #ifdef _cplusplus
 } // End extern "C"
 #endif

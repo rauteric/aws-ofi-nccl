@@ -1100,7 +1100,7 @@ static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm);
  * 		connect messages (l_comm), connect response messages (s_comm),
  * 		RDMA control messages (s_comm), eager messages (r_comm).
  */
-static inline int handle_bounce_recv(nccl_net_ofi_rdma_ep_t *ep, int rail_id, struct fi_cq_data_entry *cq_entry,
+static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rail_id, struct fi_cq_data_entry *cq_entry,
 				     nccl_net_ofi_rdma_req_t *bounce_req, bool eager)
 {
 	int ret;
@@ -1126,6 +1126,8 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_ep_t *ep, int rail_id, st
 	bounce_data->recv_len = cq_entry->len;
 	bounce_fl_item = bounce_data->bounce_fl_item;
 
+	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
+
 	nccl_ofi_rdma_msg_type_t msg_type =
 		eager ? NCCL_OFI_RDMA_MSG_EAGER : *(nccl_ofi_rdma_msg_type_t *)&bounce_fl_item->bounce_msg;
 
@@ -1135,7 +1137,7 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_ep_t *ep, int rail_id, st
 		assert(sizeof(nccl_ofi_rdma_connection_info_t) == cq_entry->len);
 
 		conn_msg = get_bounce_connection_msg(bounce_fl_item);
-		l_comm = get_listen_comm(get_device_from_ep(ep), conn_msg->remote_comm_id);
+		l_comm = get_listen_comm(device, conn_msg->remote_comm_id);
 
 		assert(l_comm->req.comm->type == NCCL_NET_OFI_LISTEN_COMM);
 		assert((nccl_net_ofi_comm_t *)l_comm == l_comm->req.comm);
@@ -1160,7 +1162,7 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_ep_t *ep, int rail_id, st
 		assert(sizeof(nccl_ofi_rdma_connection_info_t) == cq_entry->len);
 
 		conn_resp_msg = get_bounce_connection_msg(bounce_fl_item);
-		s_comm = get_send_comm(get_device_from_ep(ep), conn_resp_msg->remote_comm_id);
+		s_comm = get_send_comm(device, conn_resp_msg->remote_comm_id);
 
 		assert(NULL != s_comm->conn_resp_req);
 		assert(NCCL_NET_OFI_SEND_COMM == s_comm->conn_resp_req->comm->type);
@@ -1191,7 +1193,7 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_ep_t *ep, int rail_id, st
 		assert(sizeof(nccl_net_ofi_rdma_ctrl_msg_t) == cq_entry->len);
 
 		ctrl_msg = get_bounce_ctrl_msg(bounce_fl_item);
-		s_comm = get_send_comm(get_device_from_ep(ep), ctrl_msg->remote_comm_id);
+		s_comm = get_send_comm(device, ctrl_msg->remote_comm_id);
 
 		NCCL_OFI_TRACE_SEND_CTRL_RECV(s_comm->base.base.dev_id, rail_id, s_comm, ctrl_msg->msg_seq_num);
 
@@ -1203,7 +1205,7 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_ep_t *ep, int rail_id, st
 	case NCCL_OFI_RDMA_MSG_EAGER:
 		/* Eager message receive completion */
 
-		r_comm = get_recv_comm(get_device_from_ep(ep), GET_COMM_ID_FROM_IMM(cq_entry->data));
+		r_comm = get_recv_comm(device, GET_COMM_ID_FROM_IMM(cq_entry->data));
 
 		NCCL_OFI_TRACE_EAGER_RECV(r_comm->base.base.dev_id, rail_id, r_comm,
 					  GET_SEQ_NUM_FROM_IMM(cq_entry->data));
@@ -1229,10 +1231,10 @@ exit:
  * @param	data, the immediate data
  */
 static inline nccl_net_ofi_rdma_req_t *get_req_from_imm_data
-	(nccl_net_ofi_rdma_ep_t *ep, uint64_t data)
+	(nccl_net_ofi_rdma_device_t *device, uint64_t data)
 {
 	uint32_t comm_id = GET_COMM_ID_FROM_IMM(data);
-	nccl_net_ofi_rdma_recv_comm_t *r_comm = get_recv_comm(get_device_from_ep(ep), comm_id);
+	nccl_net_ofi_rdma_recv_comm_t *r_comm = get_recv_comm(device, comm_id);
 
 	uint16_t msg_seq_num = GET_SEQ_NUM_FROM_IMM(data);
 	void *elem;
@@ -1257,11 +1259,11 @@ static inline nccl_net_ofi_rdma_req_t *get_req_from_imm_data
 /**
  * @brief	Handle completion for a remote write event
  */
-static inline int handle_write_comp(struct fi_cq_data_entry *cq_entry, nccl_net_ofi_rdma_ep_t *ep, int rail_id)
+static inline int handle_write_comp(struct fi_cq_data_entry *cq_entry, nccl_net_ofi_rdma_device_t *device, int rail_id)
 {
 	int ret;
 
-	nccl_net_ofi_rdma_req_t *req = get_req_from_imm_data(ep, cq_entry->data);
+	nccl_net_ofi_rdma_req_t *req = get_req_from_imm_data(device, cq_entry->data);
 	if (!req) {
 		return -EINVAL;
 	}
@@ -1353,8 +1355,8 @@ static int post_eager_copy(nccl_net_ofi_rdma_req_t *req);
  * @return	0, on success
  *		error, on others
  */
-static inline int process_completions(struct fi_cq_data_entry *cq_entry, uint64_t num_cqes, nccl_net_ofi_rdma_ep_t *ep,
-				      nccl_net_ofi_ep_rail_t *rail)
+static inline int process_completions(struct fi_cq_data_entry *cq_entry, uint64_t num_cqes, nccl_net_ofi_rdma_device_t *device,
+				      int rail_id)
 {
 	int ret = 0;
 	nccl_net_ofi_rdma_req_t *req = NULL;
@@ -1387,12 +1389,12 @@ static inline int process_completions(struct fi_cq_data_entry *cq_entry, uint64_
 
 			} else if (req->type == NCCL_OFI_RDMA_SEND_CTRL) {
 				/* CTRL message send completion */
-				NCCL_OFI_TRACE_SEND_CTRL_END(req->dev_id, rail->rail_id, req->comm, req, req->msg_seq_num);
+				NCCL_OFI_TRACE_SEND_CTRL_END(req->dev_id, rail_id, req->comm, req, req->msg_seq_num);
 				ret = set_send_ctrl_completed(req);
 
 			} else if (req->type == NCCL_OFI_RDMA_SEND) {
 				/* Eager message send completion */
-				NCCL_OFI_TRACE_EAGER_SEND_COMPLETE(req->dev_id, rail->rail_id, req->comm, req->msg_seq_num, req);
+				NCCL_OFI_TRACE_EAGER_SEND_COMPLETE(req->dev_id, rail_id, req->comm, req->msg_seq_num, req);
 				send_data = get_send_data(req);
 				assert(send_data->eager);
 				ret = inc_req_completion(req, 0, send_data->total_num_compls);
@@ -1402,16 +1404,16 @@ static inline int process_completions(struct fi_cq_data_entry *cq_entry, uint64_
 			}
 		} else if (comp_flags & FI_RECV) {
 			/* Receive completions */
-			ret = handle_bounce_recv(ep, rail->rail_id, &cq_entry[comp_idx], req,
+			ret = handle_bounce_recv(device, rail_id, &cq_entry[comp_idx], req,
 						 comp_flags & FI_REMOTE_CQ_DATA);
 
 		} else if (comp_flags & FI_REMOTE_WRITE) {
 			/* Remote-initiated write is complete */
-			ret = handle_write_comp(&cq_entry[comp_idx], ep, rail->rail_id);
+			ret = handle_write_comp(&cq_entry[comp_idx], device, rail_id);
 
 		} else if (comp_flags & FI_WRITE) {
 			/* Local-initiated write is complete */
-			NCCL_OFI_TRACE_SEND_WRITE_SEG_COMPLETE(req->dev_id, rail->rail_id, req->comm, req->msg_seq_num,
+			NCCL_OFI_TRACE_SEND_WRITE_SEG_COMPLETE(req->dev_id, rail_id, req->comm, req->msg_seq_num,
 							       req);
 
 			send_data = get_send_data(req);
@@ -1453,14 +1455,14 @@ exit:
  * @return	0, on success
  *		error, on others
  */
-static inline int process_err_completion(nccl_net_ofi_rdma_ep_t *ep,
-					 nccl_net_ofi_ep_rail_t *rail)
+static inline int process_err_completion(nccl_net_ofi_rdma_device_t *device,
+					 struct fid_cq *cq)
 {
 	struct fi_cq_err_entry err_entry = { 0 };
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	int ret = 0;
 
-	ret = fi_cq_readerr(rail->cq, &err_entry, 0);
+	ret = fi_cq_readerr(cq, &err_entry, 0);
 	if (OFI_UNLIKELY(ret == -FI_EAGAIN)) {
 		/*
 		 * Error not available yet.
@@ -1490,7 +1492,7 @@ static inline int process_err_completion(nccl_net_ofi_rdma_ep_t *ep,
 	}
 
 	if (err_entry.flags & FI_REMOTE_WRITE) {
-		req = get_req_from_imm_data(ep, err_entry.data);
+		req = get_req_from_imm_data(device, err_entry.data);
 		if (!req) {
 			NCCL_OFI_WARN("Unknown remote write error, could not get CQ data");
 			ret = -EIO;
@@ -1508,7 +1510,7 @@ static inline int process_err_completion(nccl_net_ofi_rdma_ep_t *ep,
 
 	NCCL_OFI_WARN("Request %p completed with error. RC: %d. Error: %s. Completed length: %ld, Request: %s",
 		      req, err_entry.err,
-		      fi_cq_strerror(rail->cq, err_entry.prov_errno, err_entry.err_data, NULL, 0),
+		      fi_cq_strerror(cq, err_entry.prov_errno, err_entry.err_data, NULL, 0),
 		      (long)err_entry.len, nccl_net_ofi_req_str(req));
 	if (req->type == NCCL_OFI_RDMA_BOUNCE) {
 		/* A bounce buffer receive failed -- this is an internal error so bail out */
@@ -1647,11 +1649,11 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 		/* Receive completions for the given endpoint */
 		rc = fi_cq_read(rail->cq, cqe_buffers, cq_read_count);
 		if (rc > 0) {
-			ret = process_completions(cqe_buffers, rc, ep, rail);
+			ret = process_completions(cqe_buffers, rc, get_device_from_ep(ep), rail->rail_id);
 			if (OFI_UNLIKELY(ret != 0))
 				goto exit;
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
-			ret = process_err_completion(ep, rail);
+			ret = process_err_completion(get_device_from_ep(ep), rail->cq);
 			if (ret == 0) {
 				/* Error entry not available yet */
 				break;
@@ -1679,7 +1681,7 @@ exit:
 }
 
 /*
- * @brief	Process completion entries for the given completion quque.
+ * @brief	Process completion entries for the given completion queue.
  *		This also updates several request fileds like size, status, etc
  *
  * @return	0, on success

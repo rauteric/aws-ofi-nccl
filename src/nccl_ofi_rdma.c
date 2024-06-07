@@ -5904,6 +5904,11 @@ nccl_net_ofi_rdma_device_create(nccl_net_ofi_plugin_t *plugin,
 
 	device->num_comm_ids = (uint32_t)NCCL_OFI_RDMA_MAX_COMMS;
 	nccl_ofi_init_ep_addr_list(&device->ep_addr_list);
+	if (!device->ep_addr_list) {
+		NCCL_OFI_WARN("Failed to init ep addr list");
+		ret = -ENOMEM;
+		goto error;
+	}
 
 	/* Initialize libfabric resources of rdma device */
 	ret = device_prepare_for_connection(device);

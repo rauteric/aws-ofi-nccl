@@ -235,13 +235,6 @@ OFI_NCCL_PARAM_INT(errorcheck_mutex, "ERRORCHECK_MUTEX",
  */
 OFI_NCCL_PARAM_INT(endpoint_per_communicator, "ENDPOINT_PER_COMM", 1);
 
-/*
- * If 0, create a Libfabric CQ per domain, even if Libfabric endpoints
- * are associated with communicators.  If non-zer, create a CQ per
- * endpoint, regardless of how many endpoints are created per domain.
- */
-OFI_NCCL_PARAM_INT(cq_per_endpoint, "CQ_PER_ENDPOINT", 0);
-
 #ifdef _cplusplus
 } // End extern "C"
 #endif

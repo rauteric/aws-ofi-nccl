@@ -15,6 +15,7 @@
 #if HAVE_CUDA
 #include "nccl_ofi_cuda.h"
 #endif
+#include "nccl_ofi_ep_addr_list.h"
 #include "nccl_ofi_param.h"
 #include "nccl_ofi_rdma.h"
 #include "nccl_ofi_math.h"
@@ -2122,6 +2123,15 @@ static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		return -EINVAL;
 	}
 
+	/**
+	 * In ENDPOINT_PER_COMM config, the ep address in the handle is not
+	 * necessarily the same as the one in the connect response message. So,
+	 * make sure we re-initialize the first rail upon receiving the response msg.
+	 */
+	if (ofi_nccl_endpoint_per_communicator() != 0) {
+		s_comm->num_init_rails = 0;
+	}
+
 	for (int rail_id = s_comm->num_init_rails; rail_id < s_comm->num_rails; ++rail_id) {
 		nccl_net_ofi_rdma_send_comm_rail_t *comm_rail = &s_comm->rails[rail_id];
 		nccl_net_ofi_ep_rail_t *ep_rail = &ep->rails[rail_id];
@@ -3473,6 +3483,22 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	r_comm->remote_comm_id = conn_msg->local_comm_id;
 	r_comm->next_msg_seq_num = 0;
 
+	/* Find a comm to use, given the remote EP name */
+	if (ofi_nccl_endpoint_per_communicator() != 0)
+	{
+		nccl_ofi_rdma_ep_name_t *remote_rail0_ep_name = &conn_msg->ep_names[0];
+		nccl_net_ofi_ep_t *ep_for_addr = nccl_ofi_get_ep_for_addr(device->ep_addr_list, remote_rail0_ep_name);
+		if (ep_for_addr == NULL) {
+			int r = device->base.get_ep(&device->base, &ep_for_addr, false);
+			if (r != 0) {
+				assert(false); abort();
+			}
+			nccl_ofi_insert_ep_for_addr(device->ep_addr_list, &ep->base, remote_rail0_ep_name);
+		}
+		ep = (nccl_net_ofi_rdma_ep_t *)ep_for_addr;
+		r_comm->base.base.ep = &ep->base;
+	}
+
 	/* Add ourselves to ep's lookup array */
 	set_comm(device, r_comm->local_comm_id, &r_comm->base.base);
 
@@ -3790,6 +3816,22 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		}
 		l_comm->r_comm = r_comm;
 
+		/* Just in case ep changed, reset it here */
+		ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
+
+		/*
+		 * The libfabric resources maintained by the endpoint
+		 * structure is passed from l_comm to r_comm so they can
+		 * then be used by nccl_net_ofi_irecv. We want to make
+		 * sure those resources are not freed up when we call
+		 * nccl_net_ofi_closeListen so we maintain an additional
+		 * refcnt and free it up when nccl_net_ofi_closeRecv is
+		 * called.
+		 */
+		nccl_net_ofi_mutex_lock(&(device->ep_lock));
+		ep->ref_cnt++;
+		nccl_net_ofi_mutex_unlock(&(device->ep_lock));
+
 		/* Reset request state for connect response message */
 		prepare_send_conn_resp_req(l_comm);
 
@@ -3810,6 +3852,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	case COMM_SEND_CONN:
 
 		/* COMM_SEND_CONN: Send connect response message to remote */
+		ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 		ret = post_send_conn_resp(r_comm, conn_msg, device, ep, req);
 		if (ret == -FI_EAGAIN) {
 			return 0;
@@ -3826,6 +3869,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		 * cleanup and return receive communicator. */
 
 		/* Progress our engine to get completions */
+		ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 		ret = ofi_process_cq(ep);
 		if (OFI_UNLIKELY(ret != 0)) {
 			goto exit;
@@ -3840,19 +3884,6 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		if (req_state != NCCL_OFI_RDMA_REQ_COMPLETED) {
 			return 0;
 		}
-
-		/*
-		 * The libfabric resources maintained by the endpoint
-		 * structure is passed from l_comm to r_comm so they can
-		 * then be used by nccl_net_ofi_irecv. We want to make
-		 * sure those resources are not freed up when we call
-		 * nccl_net_ofi_closeListen so we maintain an additional
-		 * refcnt and free it up when nccl_net_ofi_closeRecv is
-		 * called.
-		 */
-		nccl_net_ofi_mutex_lock(&(device->ep_lock));
-		ep->ref_cnt++;
-		nccl_net_ofi_mutex_unlock(&(device->ep_lock));
 
 		*recv_comm = &r_comm->base;
 
@@ -5415,10 +5446,10 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 	/* Decrease reference counter of endpoint. */
 	ep->ref_cnt--;
 
-	/* If reference counter is equals zero, release endpoint and
-	 * set thread-local endpoint key to NULL.
+	/* If reference counter is equals zero, release endpoint. Free endpoint
+	 * unless it is a thread-local ep.
 	 *
-	 * Ideally we would also free up the endpoint here but there
+	 * Ideally we would also free up thread-local endpoints here but there
 	 * is no straightforward way to do that in this case. The
 	 * caller of get_ep maintains the endpoint and its
 	 * memory in its thread-local device storage. The endpoint
@@ -5433,6 +5464,10 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 	 * deallocation.
 	 */
 	if (ep->ref_cnt == 0) {
+
+		if (ofi_nccl_endpoint_per_communicator() != 0)
+			nccl_ofi_delete_ep_for_addr(device->ep_addr_list, &ep->base);
+
 		/* Ideally we would "un-post" the bounce buffers, but this
 		   should be accomplished by closing the endpoint. */
 		release_rdma_ep_resources(ep, device->base.dev_id);
@@ -5449,6 +5484,10 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 		}
 		free(ep->rails);
 		ep->rails = NULL;
+
+		if (!ep->thread_local_ep) {
+			free(ep);
+		}
 	}
 
  unlock:
@@ -5459,7 +5498,8 @@ static int release_ep(nccl_net_ofi_ep_t *base_ep)
 }
 
 static int get_ep(nccl_net_ofi_device_t *base_dev,
-				    nccl_net_ofi_ep_t **base_ep)
+				    nccl_net_ofi_ep_t **base_ep,
+				    bool use_thread_local_ep)
 {
 	int ret = 0;
 
@@ -5475,9 +5515,10 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 	/* Obtain lock */
 	nccl_net_ofi_mutex_lock(&device->ep_lock);
 
-	int ep_per_comm = ofi_nccl_endpoint_per_communicator();
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
-	if (ep_per_comm == 0) {
+	bool use_thread_local = ( ofi_nccl_endpoint_per_communicator() == 0 ||
+		use_thread_local_ep );
+	if (use_thread_local) {
 		/* Obtain thread-local rdma endpoint. Allocate and
 		 * initialize endpoint if neccessary. */
 		ep = pthread_getspecific(device->ep_key);
@@ -5508,8 +5549,11 @@ static int get_ep(nccl_net_ofi_device_t *base_dev,
 		ep->bounce_buff_size = NCCL_OFI_MAX(NCCL_OFI_MAX(sizeof(nccl_net_ofi_rdma_ctrl_msg_t), eager_max_size),
 						    sizeof(nccl_ofi_rdma_connection_info_t));
 
-		/* Store endpoint in thread-local variable */
-		pthread_setspecific(device->ep_key, (void *)ep);
+		ep->thread_local_ep = use_thread_local;
+		if (use_thread_local) {
+			/* Store endpoint in thread-local variable */
+			pthread_setspecific(device->ep_key, (void *)ep);
+		}
 
 		NCCL_OFI_TRACE(NCCL_NET, "RDMA endpoint %p for dev #%d is created",
 			       ep,
@@ -5778,8 +5822,10 @@ nccl_net_ofi_rdma_device_release(nccl_net_ofi_device_t *base_device)
 		}
 	}
 
-	free(device->comms);
-	device->comms = NULL;
+	if (device->comms) {
+		free(device->comms);
+		device->comms = NULL;
+	}
 
 	if (device->comm_idpool) {
 		ret = nccl_ofi_idpool_fini(device->comm_idpool);
@@ -5789,6 +5835,11 @@ nccl_net_ofi_rdma_device_release(nccl_net_ofi_device_t *base_device)
 		}
 		free(device->comm_idpool);
 		device->comm_idpool = NULL;
+	}
+
+	if (device->ep_addr_list) {
+		nccl_ofi_ep_addr_list_fini(device->ep_addr_list);
+		device->ep_addr_list = NULL;
 	}
 
 	ret = nccl_net_ofi_device_fini(base_device);
@@ -5869,6 +5920,17 @@ nccl_net_ofi_rdma_device_create(nccl_net_ofi_plugin_t *plugin,
 	}
 
 	device->num_comm_ids = (uint32_t)NCCL_OFI_RDMA_MAX_COMMS;
+
+	if (ofi_nccl_endpoint_per_communicator() != 0) {
+		nccl_ofi_init_ep_addr_list(&device->ep_addr_list);
+		if (!device->ep_addr_list) {
+			NCCL_OFI_WARN("Failed to init ep addr list");
+			ret = -ENOMEM;
+			goto error;
+		}
+	} else {
+		device->ep_addr_list = NULL;
+	}
 
 	/* Initialize libfabric resources of rdma device */
 	ret = device_prepare_for_connection(device);

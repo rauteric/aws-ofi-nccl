@@ -244,6 +244,16 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 
 	assert(support_gdr != GDR_UNKNOWN);
 
+	ret = nccl_ofi_mr_cache_init(&device->mr_cache, NCCL_OFI_MR_CACHE_SIZE);
+	if (ret) {
+		goto exit;
+	}
+
+	ret = nccl_net_ofi_mutex_init(&device->mr_cache_lock, NULL);
+	if (ret) {
+		goto exit;
+	}
+
 	/* we don't actually know if GDR is supported until we've
 	 * created the first endpoint, so this check needs to be way
 	 * down here

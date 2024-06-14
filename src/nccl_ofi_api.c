@@ -7,7 +7,7 @@
 
 #include "nccl_ofi.h"
 #include "nccl_ofi_api.h"
-
+#include "nccl_ofi_pthread.h"
 
 _Static_assert(sizeof(nccl_net_ofi_conn_handle_t) <= NCCL_NET_HANDLE_MAXSIZE,
 	       "Size of OFI Handle is too large");
@@ -284,6 +284,13 @@ ncclResult_t nccl_net_ofi_regMr_v7(void *comm, void *data, int size, int type,
 ncclResult_t nccl_net_ofi_regMr(void *comm, void *data, size_t size, int type,
 				void **mhandle)
 {
+	nccl_net_ofi_device_t *dev;
+	nccl_ofi_mr_cache_t *cache;
+	nccl_ofi_reg_entry_t *entry;
+	static __thread uintptr_t page_size;
+	uintptr_t addr;
+	void *ptr;
+	size_t pages;
 	int ret = 0;
 
 	/* Retrieve and validate comm */
@@ -308,29 +315,82 @@ ncclResult_t nccl_net_ofi_regMr(void *comm, void *data, size_t size, int type,
 		return ncclInternalError;
 	}
 
-	switch (base_comm->type) {
-	case NCCL_NET_OFI_SEND_COMM:;
-		nccl_net_ofi_send_comm_t *send_comm =
-			(nccl_net_ofi_send_comm_t *)base_comm;
-		ret = send_comm->regMr(send_comm, data, size, type, mhandle);
-		break;
-	case NCCL_NET_OFI_RECV_COMM:;
-		nccl_net_ofi_recv_comm_t *recv_comm =
-			(nccl_net_ofi_recv_comm_t *)base_comm;
-		ret = recv_comm->regMr(recv_comm, data, size, type, mhandle);
-		break;
-	default:
-		NCCL_OFI_WARN("Unexpected communicator type. Communicator type: %d",
-			      base_comm->type);
-		ret = -EINVAL;
-		break;
+	page_size = (uintptr_t) system_page_size;
+	addr = (uintptr_t)data & -page_size; /* start of page of data */
+	pages = ((uintptr_t)data + size - addr + page_size-1)/page_size; /* Number of pages in buffer */
+	dev = base_comm->ep->device;
+	cache = &dev->mr_cache;
+	assert(dev);
+	assert(cache);
+
+	/* NCCL_REG is a better subsys to log these to, but ext-net headers do not have the updated enums yet. */
+	NCCL_OFI_TRACE(NCCL_NET, "Reg addr %lx data %p pages %zu pgsz %zu", addr, data, pages, page_size);
+
+	nccl_net_ofi_mutex_lock(&cache->lock);
+	for (int slot = 0;; slot++) {
+		if (slot == cache->used || addr < cache->slots[slot]->addr) { /* Cache miss */
+			if (cache->used == cache->size) { /* Need to grow cache */
+				cache->size = cache->size < NCCL_OFI_MR_CACHE_SIZE ?
+					      NCCL_OFI_MR_CACHE_SIZE : cache->size * 2;
+				NCCL_OFI_TRACE(NCCL_NET, "Growing cache to size %d", cache->size);
+				ptr =  realloc(cache->slots, cache->size * sizeof(*cache->slots));
+				if (!ptr) {
+					NCCL_OFI_WARN("Unable to grow cache");
+					goto out;
+				}
+				cache->slots = ptr;
+			}
+			assert(cache->slots);
+			memmove(cache->slots+slot+1, cache->slots+slot, (cache->size - slot) * sizeof(nccl_ofi_reg_entry_t*));
+			cache->slots[slot] = calloc(1, sizeof(nccl_ofi_reg_entry_t));
+
+			entry = cache->slots[slot];
+			/* Register with network */
+			switch (base_comm->type) {
+			case NCCL_NET_OFI_SEND_COMM:;
+				nccl_net_ofi_send_comm_t *send_comm =
+					(nccl_net_ofi_send_comm_t *)base_comm;
+				ret = send_comm->regMr(send_comm, data, size, type, &entry->handle);
+				break;
+			case NCCL_NET_OFI_RECV_COMM:;
+				nccl_net_ofi_recv_comm_t *recv_comm =
+					(nccl_net_ofi_recv_comm_t *)base_comm;
+				ret = recv_comm->regMr(recv_comm, data, size, type, &entry->handle);
+				break;
+			default:
+				NCCL_OFI_WARN("Unexpected communicator type. Communicator type: %d",
+					      base_comm->type);
+				ret = -EINVAL;
+				goto out;
+			}
+
+			entry->addr = addr;
+			entry->pages = pages;
+			entry->refcnt = 1;
+			cache->used++;
+			*mhandle = entry->handle;
+			goto out;
+		} else if ((addr >=  cache->slots[slot]->addr) &&
+			   ((addr -  cache->slots[slot]->addr)/system_page_size + pages) <=  cache->slots[slot]->pages) {
+			/* Cache hit */
+			NCCL_OFI_TRACE(NCCL_NET, "Found MR handle for %p in cache slot %d", data, slot);
+			cache->slots[slot]->refcnt++;
+			*mhandle = cache->slots[slot]->handle;
+			goto out;
+		}
 	}
 
+out:
+	nccl_net_ofi_mutex_unlock(&cache->lock);
 	return nccl_net_ofi_retval_translate(ret);
 }
 
 ncclResult_t nccl_net_ofi_deregMr(void *comm, void *mhandle)
 {
+	nccl_net_ofi_device_t *dev;
+	nccl_ofi_mr_cache_t *cache;
+	int ret = 0;
+
 	/* Retrieve and validate comm */
 	nccl_net_ofi_comm_t *base_comm =
 		(nccl_net_ofi_comm_t *)comm;
@@ -338,27 +398,56 @@ ncclResult_t nccl_net_ofi_deregMr(void *comm, void *mhandle)
 		NCCL_OFI_WARN("Invalid comm object provided");
 		return ncclInternalError;
 	}
+	dev = base_comm->ep->device;
+	cache = &dev->mr_cache;
 
-	int ret = 0;
+	for (int i = 0; i < cache->used; i++) {
+		if (mhandle == cache->slots[i]->handle) {
+			/* Keep the entry alive for other users */
+			if (--cache->slots[i]->refcnt)
+				goto out;
 
-	switch (base_comm->type) {
-	case NCCL_NET_OFI_SEND_COMM:;
-		nccl_net_ofi_send_comm_t *send_comm =
-			(nccl_net_ofi_send_comm_t *)base_comm;
-		ret = send_comm->deregMr(send_comm, mhandle);
-		break;
-	case NCCL_NET_OFI_RECV_COMM:;
-		nccl_net_ofi_recv_comm_t *recv_comm =
-			(nccl_net_ofi_recv_comm_t *)base_comm;
-		ret = recv_comm->deregMr(recv_comm, mhandle);
-		break;
-	default:
-		NCCL_OFI_WARN("Unexpected communicator type. Communicator type: %d",
-			      base_comm->type);
-		ret = -EINVAL;
-		break;
+			switch (base_comm->type) {
+			case NCCL_NET_OFI_SEND_COMM:;
+				nccl_net_ofi_send_comm_t *send_comm =
+					(nccl_net_ofi_send_comm_t *)base_comm;
+				ret = send_comm->deregMr(send_comm, mhandle);
+				goto out;
+			case NCCL_NET_OFI_RECV_COMM:;
+				nccl_net_ofi_recv_comm_t *recv_comm =
+					(nccl_net_ofi_recv_comm_t *)base_comm;
+				ret = recv_comm->deregMr(recv_comm, mhandle);
+				goto out;
+			default:
+				NCCL_OFI_WARN("Unexpected communicator type. Communicator type: %d",
+					      base_comm->type);
+				ret = -EINVAL;
+				goto out;
+			}
+
+			/* Free this entry and defrag cache */
+			free(cache->slots[i]);
+			memmove(cache->slots+i, cache->slots+i+1, (cache->size-i-1)*sizeof(nccl_ofi_mr_cache_t*));
+
+
+			/* Final registration using the cache, free the cache */
+			if (--cache->used == 0) {
+				free(cache->slots);
+				cache->slots = NULL;
+				cache->size = 0;
+				ret = nccl_net_ofi_mutex_destroy(&cache->lock);
+				if (OFI_UNLIKELY(ret)) {
+					NCCL_OFI_WARN("Could not destroy MR cache mutex");
+				}
+			}
+			goto out;
+		}
 	}
 
+	NCCL_OFI_WARN("MR can not be deregisterd. Handle %p cache size %d.", mhandle, cache->size);
+	ret = -ENOENT;
+
+out:
 	return nccl_net_ofi_retval_translate(ret);
 }
 

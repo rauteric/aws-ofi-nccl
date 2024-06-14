@@ -245,6 +245,15 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 
 	assert(support_gdr != GDR_UNKNOWN);
 
+	device->mr_cache.size = 0;
+	device->mr_cache.used = 0;
+	device->mr_cache.slots = NULL;
+	ret = nccl_net_ofi_mutex_init(&device->mr_cache.lock, NULL);
+	if (OFI_UNLIKELY(ret)) {
+		NCCL_OFI_WARN("Unable to initialize MR cache mutex.");
+		goto exit;
+	}
+
 	/* we don't actually know if GDR is supported until we've
 	 * created the first endpoint, so this check needs to be way
 	 * down here

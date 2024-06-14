@@ -21,6 +21,7 @@ extern "C" {
 #include "nccl_ofi_log.h"
 #include "nccl_ofi_topo.h"
 #include "nccl_ofi_idpool.h"
+#include "nccl_ofi_pthread.h"
 
 
 /*
@@ -70,6 +71,14 @@ extern "C" {
 
 /* Flush read size (bytes) */
 #define NCCL_OFI_FLUSH_SIZE	4
+
+
+/*
+ * Initial size of the MR cache. The cache will grow as needed (with a
+ * realloc()) in the registration path if more entries need to be held. Using
+ * the same default NCCL uses.
+ */
+#define NCCL_OFI_MR_CACHE_SIZE 32
 
 /* Indicates if GPUDirect is supported by libfabric provider */
 enum gdr_support_level_t {GDR_UNKNOWN, GDR_SUPPORTED, GDR_UNSUPPORTED};
@@ -232,6 +241,26 @@ typedef struct nccl_ofi_properties {
 } nccl_ofi_properties_t;
 
 /**
+ * A memory registration cache entry
+ */
+typedef struct nccl_ofi_reg_entry {
+	uintptr_t addr;
+	size_t pages;
+	int refcnt;
+	void *handle;
+} nccl_ofi_reg_entry_t;
+
+/**
+ * Device-specific memory registration cache.
+ */
+typedef struct nccl_ofi_mr_cache {
+	nccl_ofi_reg_entry_t **slots;
+	int size;
+	int used;
+	pthread_mutex_t lock;
+} nccl_ofi_mr_cache_t;
+
+/**
  * Device Data
  *
  * A device is roughly a NIC (or a port on a NIC) or a multi-rail
@@ -247,11 +276,21 @@ struct nccl_net_ofi_device {
 	/* this device's index in the plugin's devices array */
 	int dev_id;
 
-	/* name of the device - should include the provider name, but
-	   may be augmented (in the case of mrail).  Set during the
-	   transport's initialization, and should be read-only from
-	   that point. */
+	/*
+	 * name of the device - should include the provider name, but may be
+	 * augmented (in the case of mrail).  Set during the transport's
+	 * initialization, and should be read-only from that point.
+	 */
 	char *name;
+
+	/*
+	 * Protocol-agnostic MR cache for this device. Note that Registrations
+	 * are tied to domains in libfabric, but we do not have a
+	 * domain-specific object today, so stashing it in the device itself.
+	 * This should change if we were to break up nccl_net_ofi_device into
+	 * separate device and domain objects.
+	 */
+	nccl_ofi_mr_cache_t mr_cache;
 
 	int (*get_properties)(nccl_net_ofi_device_t *base_dev,
 			      nccl_ofi_properties_t *props);
@@ -261,8 +300,8 @@ struct nccl_net_ofi_device {
 	 * 		nccl_ofi_device.  Create if it does not exist. Store
 	 * 		in pthread key. Increase reference counter. Must be
 	 * 		protected by lock stored in device.
-	 * 
-	 * 		During the plugin initialization, this function will be 
+	 *
+	 * 		During the plugin initialization, this function will be
 	 * 		called once per process using one of the instantiated device structs
 	 * 		to create and configure the endpoint of the initializing thread.
 	 */

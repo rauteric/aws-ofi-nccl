@@ -3258,6 +3258,9 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 		goto exit;
 	}
 
+	NCCL_OFI_WARN("Ignoring recv close request");
+	goto exit;
+
 	if (is_flush_buff_enabled()) {
 		ret = dealloc_and_dereg_flush_buff(r_comm, device);
 		if (ret != 0) {
@@ -4743,6 +4746,9 @@ static int send_close(nccl_net_ofi_send_comm_t *send_comm)
 		ret = -EINVAL;
 		goto exit;
 	}
+
+	NCCL_OFI_WARN("Ignoring send close request");
+	goto exit;
 
 	/* Release connect response request if available */
 	if (s_comm->conn_resp_req) {

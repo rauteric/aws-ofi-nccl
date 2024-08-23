@@ -2877,6 +2877,7 @@ static inline int allocate_rdma_recv_req(
 				int dev_id, uint16_t msg_seq_num, void *buff,
 				size_t size,
 				nccl_net_ofi_rdma_mr_handle_t *buff_mr_handle,
+				bool eager,
 				nccl_net_ofi_rdma_req_t **ret_req)
 {
 	int ret = 0;
@@ -2905,10 +2906,14 @@ static inline int allocate_rdma_recv_req(
 	recv_data->dest_mr_handle = buff_mr_handle;
 
 	/* TODO consolidate arguments to insert_send_ctrl_req and insert_recv_segms_req */
-	ret = insert_send_ctrl_req(r_comm, device, dev_id, msg_seq_num, buff, size, buff_mr_handle, req);
-	if (ret) {
-		NCCL_OFI_WARN("Failed to insert send ctrl request into recv request");
-		return ret;
+	if (!eager) {
+		ret = insert_send_ctrl_req(r_comm, device, dev_id, msg_seq_num, buff, size, buff_mr_handle, req);
+		if (ret) {
+			NCCL_OFI_WARN("Failed to insert send ctrl request into recv request");
+			return ret;
+		}
+	} else {
+		recv_data->send_ctrl_req = NULL;
 	}
 
 	ret = insert_recv_segms_req(r_comm, device, dev_id, msg_seq_num, buff, size, buff_mr_handle, req);
@@ -3059,7 +3064,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	ret = allocate_rdma_recv_req(r_comm, device, dev_id, msg_seq_num,
 					buffers[0], sizes[0],
-					mr_handles[0], &req);
+					mr_handles[0], eager, &req);
 	if (ret != 0) {
 		goto error;
 	}
@@ -3098,12 +3103,6 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	NCCL_OFI_TRACE_RECV(dev_id, r_comm->local_comm_id, sizes[0], req, base_req);
 
-	ret = receive_progress(recv_data->send_ctrl_req, true);
-	if (OFI_UNLIKELY(ret != 0)) {
-		/* TODO: Remove req from message buffer */
-		goto error;
-	}
-
 	if (eager) {
 		if (recv_data->eager_copy_req == NULL) {
 			/* If we don't need to do eager copy, this recv is already complete */
@@ -3119,6 +3118,14 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 				/* TODO: Remove req from message buffer */
 				goto error;
 			}
+		}
+	} else {
+		/* Send ctrl msg */
+		assert(recv_data->send_ctrl_req != NULL);
+		ret = receive_progress(recv_data->send_ctrl_req, true);
+		if (OFI_UNLIKELY(ret != 0)) {
+			/* TODO: Remove req from message buffer */
+			goto error;
 		}
 	}
 

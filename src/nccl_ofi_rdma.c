@@ -676,9 +676,6 @@ static inline int set_eager_copy_completed(nccl_net_ofi_rdma_req_t *req)
 static inline int set_send_ctrl_completed(nccl_net_ofi_rdma_req_t *req)
 {
 	assert(req->type == NCCL_OFI_RDMA_SEND_CTRL);
-	rdma_req_send_ctrl_data_t *send_ctrl_data = get_send_ctrl_data(req);
-	nccl_net_ofi_rdma_req_t *recv_req = send_ctrl_data->recv_req;
-	rdma_req_recv_data_t *recv_data = get_recv_data(recv_req);
 
 	nccl_net_ofi_mutex_lock(&req->req_lock);
 
@@ -686,12 +683,11 @@ static inline int set_send_ctrl_completed(nccl_net_ofi_rdma_req_t *req)
 	req->ncompls = 1;
 	req->state = NCCL_OFI_RDMA_REQ_COMPLETED;
 
-	NCCL_OFI_TRACE_RECV_CTRL_SEND_COMPLETE(recv_req);
+	//NCCL_OFI_TRACE_RECV_CTRL_SEND_COMPLETE(recv_req);
 
 	nccl_net_ofi_mutex_unlock(&req->req_lock);
 
-	/* Add completion to parent request */
-	return inc_req_completion(recv_req, 0, recv_data->total_num_compls);
+	return req->free(req, false);
 }
 
 /*
@@ -1775,17 +1771,8 @@ static inline int free_recv_req(nccl_net_ofi_rdma_req_t *req,
 	nccl_net_ofi_rdma_recv_comm_t *r_comm =
 		(nccl_net_ofi_rdma_recv_comm_t *)req->comm;
 	rdma_req_recv_data_t *recv_data = get_recv_data(req);
-	nccl_net_ofi_rdma_req_t *send_ctrl_req = recv_data->send_ctrl_req;
 	nccl_net_ofi_rdma_req_t *recv_segms_req = recv_data->recv_segms_req;
 	nccl_net_ofi_rdma_req_t *eager_copy_req = recv_data->eager_copy_req;
-
-	if (send_ctrl_req) {
-		ret = send_ctrl_req->free(send_ctrl_req, false);
-		if (ret) {
-			NCCL_OFI_WARN("Failed to free receive request");
-			return ret;
-		}
-	}
 
 	if (recv_segms_req) {
 		ret = recv_segms_req->free(recv_segms_req, false);
@@ -2911,7 +2898,7 @@ static inline int allocate_rdma_recv_req(
 	req->msg_seq_num = msg_seq_num;
 
 	recv_data = get_recv_data(req);
-	recv_data->total_num_compls = 2;
+	recv_data->total_num_compls = 1;
 	recv_data->eager_copy_req = NULL;
 	recv_data->dst_buff = buff;
 	recv_data->dst_len = size;

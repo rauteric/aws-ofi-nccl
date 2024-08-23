@@ -889,6 +889,11 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		return decrease_bounce_buff_cnt(ep, get_bounce_data(bounce_req)->rail);
 	}
 
+	if (mb_res == NCCL_OFI_MSGBUFF_INVALID_IDX && stat == NCCL_OFI_MSGBUFF_COMPLETED) {
+		/* This message is already complete. Release recv buffer */
+		return repost_bounce_buff(ep, bounce_req);
+	}
+
 	if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_INVALID_IDX || stat != NCCL_OFI_MSGBUFF_INPROGRESS)) {
 		NCCL_OFI_WARN("Unexpected message insert result (%d) (ctrl recv)", (int)mb_res);
 		return -EINVAL;
@@ -942,13 +947,6 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 			send_data->buff_len = send_data->remote_len;
 		}
 		nccl_net_ofi_mutex_unlock(&req->req_lock);
-
-		/* In the eager case, increment completion count for send req */
-		ret = inc_req_completion(req, 0, send_data->total_num_compls);
-		if (ret != 0) {
-			NCCL_OFI_WARN("Failed to increase completion count");
-			return ret;
-		}
 	}
 
 	/* Attempt to re-post bounce buffer */
@@ -4187,9 +4185,8 @@ static int alloc_rdma_send_req(nccl_net_ofi_rdma_send_comm_t *s_comm,
 			return -EINVAL;
 		}
 
-		/* Set expected number of completions. Since this is an eager send, the ctrl msg
-		   has not arrived, so we expect one extra completion for the ctrl msg recv. */
-		send_data->total_num_compls = send_data->schedule->num_xfer_infos + 1;
+		/* Set expected number of completions. */
+		send_data->total_num_compls = send_data->schedule->num_xfer_infos;
 		send_data->wdata = GET_RDMA_WRITE_IMM_DATA(s_comm->remote_comm_id, req->msg_seq_num,
 							   send_data->schedule->num_xfer_infos);
 	}

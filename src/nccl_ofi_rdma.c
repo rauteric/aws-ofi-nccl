@@ -3013,6 +3013,12 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	assert(r_comm != NULL);
 
+	if (r_comm->comm_active == false) {
+		NCCL_OFI_WARN("Called irecv on inactive communicator");
+		ret = -EINVAL;
+		goto error;
+	}
+
 	if (OFI_UNLIKELY(r_comm->num_inflight_reqs == NCCL_OFI_MAX_REQUESTS)) {
 		ret = -ENOSPC;
 		NCCL_OFI_WARN("Can not support more than %d inflight requests",
@@ -3323,6 +3329,8 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 		goto exit;
 	}
 
+	r_comm->comm_active = false;
+
 	ret = recv_comm_destroy_resources(r_comm);
 
 	free(r_comm);
@@ -3542,6 +3550,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	r_comm->base.recv = recv;
 	r_comm->base.flush = flush;
 	r_comm->base.close = recv_close;
+	r_comm->comm_active = true;
 
 	/* Allocate recv communicator ID */
 	int comm_id = nccl_ofi_idpool_allocate_id(device->comm_idpool);
@@ -4606,6 +4615,12 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 
 	assert(s_comm != NULL);
 
+	if (s_comm->comm_active == false) {
+		NCCL_OFI_WARN("Called isend on inactive communicator");
+		ret = -EINVAL;
+		goto error;
+	}
+
 	/* Support only NCCL_OFI_MAX_REQUESTS inflight requests. */
 	if (OFI_UNLIKELY(s_comm->num_inflight_reqs == NCCL_OFI_MAX_SEND_REQUESTS)) {
 		ret = -EINVAL;
@@ -4817,6 +4832,8 @@ static int send_close(nccl_net_ofi_send_comm_t *send_comm)
 		goto exit;
 	}
 
+	s_comm->comm_active = false;
+
 	ret = send_comm_destroy_resources(s_comm);
 	if (ret != 0) {
 		goto exit;
@@ -5019,6 +5036,7 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->base.deregMr = dereg_mr_send_comm;
 	ret_s_comm->base.send = send;
 	ret_s_comm->base.close = send_close;
+	ret_s_comm->comm_active = true;
 	ret_s_comm->next_msg_seq_num = 0;
 
 	/* Store communicator ID from handle in communicator */

@@ -3250,10 +3250,8 @@ static int alloc_and_reg_flush_buff(nccl_net_ofi_rdma_recv_comm_t *r_comm, int d
 	return ret;
 }
 
-static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
+static int recv_comm_destroy_resources(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 {
-	nccl_net_ofi_rdma_recv_comm_t *r_comm =
-		(nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
 	int ret = 0;
 
 	/* Retrieve and validate endpoint */
@@ -3265,13 +3263,6 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 	}
 
 	nccl_net_ofi_rdma_device_t *device = (nccl_net_ofi_rdma_device_t*)base_ep->device;
-
-	/* Make sure all requests are finished */
-	if (r_comm->num_inflight_reqs > 0) {
-		NCCL_OFI_WARN("Attempt to call recv_close with outstanding requests!");
-		ret = -EINVAL;
-		goto exit;
-	}
 
 	if (is_flush_buff_enabled()) {
 		ret = dealloc_and_dereg_flush_buff(r_comm, device);
@@ -3314,6 +3305,25 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 	if (OFI_UNLIKELY(ret != 0)) {
 		NCCL_OFI_WARN("Error freeing communicator ID %"PRIu32"", r_comm->local_comm_id);
 	}
+
+exit:
+	return ret;
+}
+
+static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
+{
+	nccl_net_ofi_rdma_recv_comm_t *r_comm =
+		(nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
+	int ret = 0;
+
+	/* Make sure all requests are finished */
+	if (r_comm->num_inflight_reqs > 0) {
+		NCCL_OFI_WARN("Attempt to call recv_close with outstanding requests!");
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	ret = recv_comm_destroy_resources(r_comm);
 
 	free(r_comm);
  exit:
@@ -4748,19 +4758,9 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 	return ret;
 }
 
-static int send_close(nccl_net_ofi_send_comm_t *send_comm)
+static int send_comm_destroy_resources(nccl_net_ofi_rdma_send_comm_t *s_comm)
 {
 	int ret = 0;
-
-	nccl_net_ofi_rdma_send_comm_t *s_comm =
-		(nccl_net_ofi_rdma_send_comm_t *)send_comm;
-
-	/* Make sure all requests are finished */
-	if (s_comm->num_inflight_reqs > 0) {
-		NCCL_OFI_WARN("Attempt to call send_close with outstanding requests!");
-		ret = -EINVAL;
-		goto exit;
-	}
 
 	/* Release connect response request if available */
 	if (s_comm->conn_resp_req) {
@@ -4789,6 +4789,7 @@ static int send_close(nccl_net_ofi_send_comm_t *send_comm)
 	ret = nccl_ofi_idpool_free_id(device->comm_idpool, s_comm->local_comm_id);
 	if (OFI_UNLIKELY(ret != 0)) {
 		NCCL_OFI_WARN("Error freeing communicator ID %"PRIu32"", s_comm->local_comm_id);
+		goto exit;
 	}
 
 	/* Destroy domain */
@@ -4797,6 +4798,29 @@ static int send_close(nccl_net_ofi_send_comm_t *send_comm)
 		nvtxDomainDestroy(s_comm->nvtx_domain[i]);
 	}
 #endif
+
+exit:
+	return ret;
+}
+
+static int send_close(nccl_net_ofi_send_comm_t *send_comm)
+{
+	int ret = 0;
+
+	nccl_net_ofi_rdma_send_comm_t *s_comm =
+		(nccl_net_ofi_rdma_send_comm_t *)send_comm;
+
+	/* Make sure all requests are finished */
+	if (s_comm->num_inflight_reqs > 0) {
+		NCCL_OFI_WARN("Attempt to call send_close with outstanding requests!");
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	ret = send_comm_destroy_resources(s_comm);
+	if (ret != 0) {
+		goto exit;
+	}
 
 	free(s_comm);
 

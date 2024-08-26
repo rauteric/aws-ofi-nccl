@@ -435,6 +435,8 @@ typedef struct nccl_net_ofi_rdma_send_comm {
 	 * and its base struct. */
 	nccl_net_ofi_send_comm_t base;
 
+	bool comm_active;
+
 	uint64_t num_inflight_reqs;
 	nccl_ofi_freelist_t *nccl_ofi_reqs_fl;
 
@@ -515,6 +517,8 @@ typedef struct nccl_net_ofi_rdma_recv_comm {
 	 * this struct. This allows casting between pointers of this
 	 * struct and its base struct. */
 	nccl_net_ofi_recv_comm_t base;
+
+	bool comm_active;
 
 	uint64_t num_inflight_reqs;
 	nccl_ofi_freelist_t *nccl_ofi_reqs_fl;

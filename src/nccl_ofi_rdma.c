@@ -28,6 +28,8 @@
 #include "nccl_ofi_platform.h"
 #include "nccl_ofi_mr.h"
 
+#include "contrib/utlist.h"
+
 /* Message buffer size -- maximum span of simultaneous inflight messages */
 #define NCCL_OFI_RDMA_MSGBUFF_SIZE 256
 
@@ -89,6 +91,10 @@
 
 /* Maximum size of an eager message (see OFI_NCCL_EAGER_MAX_SIZE) */
 static size_t eager_max_size = 0;
+
+/* List of send comms undergoing deferred cleanup */
+static nccl_net_ofi_rdma_send_comm_t *s_comm_cleanup_list = NULL;
+static pthread_mutex_t s_comm_cleanup_list_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Function prototypes */
 static int send_progress(nccl_net_ofi_rdma_req_t *req);
@@ -4818,6 +4824,52 @@ exit:
 	return ret;
 }
 
+/**
+ * Process all finalizing s_comm's, and free if done
+ */
+static int send_comm_process_all_finalizing(void)
+{
+	int ret = 0;
+
+	nccl_net_ofi_rdma_send_comm_t *s_comm = NULL, *tmp = NULL;
+
+	nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
+	DL_FOREACH_SAFE(s_comm_cleanup_list, s_comm, tmp) {
+		nccl_net_ofi_mutex_lock(&s_comm->cleanup_lock);
+
+		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
+			s_comm->base.base.ep;
+		ret = ofi_process_cq(ep);
+		if (ret != 0) {
+			nccl_net_ofi_mutex_unlock(&s_comm->cleanup_lock);
+			goto unlock;
+		}
+
+		/* TODO wait for close message */
+		s_comm->received_close_message = true;
+		ret = send_comm_destroy_resources(s_comm);
+		if (ret != 0) {
+			nccl_net_ofi_mutex_unlock(&s_comm->cleanup_lock);
+			goto unlock;
+		}
+
+		s_comm->state = NCCL_OFI_RDMA_COMM_FINALIZED;
+		nccl_net_ofi_mutex_unlock(&s_comm->cleanup_lock);
+
+		DL_DELETE(s_comm_cleanup_list, s_comm);
+		ret = nccl_net_ofi_mutex_destroy(&s_comm->cleanup_lock);
+		if (ret != 0) {
+			goto unlock;
+		}
+
+		free(s_comm);
+	}
+
+unlock:
+	nccl_net_ofi_mutex_unlock(&s_comm_cleanup_list_lock);
+	return ret;
+}
+
 static int send_close(nccl_net_ofi_send_comm_t *send_comm)
 {
 	int ret = 0;
@@ -4834,12 +4886,12 @@ static int send_close(nccl_net_ofi_send_comm_t *send_comm)
 
 	s_comm->comm_active = false;
 
-	ret = send_comm_destroy_resources(s_comm);
+	DL_APPEND(s_comm_cleanup_list, s_comm);
+
+	ret = send_comm_process_all_finalizing();
 	if (ret != 0) {
 		goto exit;
 	}
-
-	free(s_comm);
 
  exit:
 	return ret;
@@ -5038,6 +5090,32 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->base.close = send_close;
 	ret_s_comm->comm_active = true;
 	ret_s_comm->next_msg_seq_num = 0;
+	ret_s_comm->prev = NULL;
+	ret_s_comm->next = NULL;
+	ret_s_comm->received_close_message = false;
+	/* Init cleanup_lock */
+	{
+		pthread_mutexattr_t attr;
+		ret = pthread_mutexattr_init(&attr);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to init mutexattr");
+			goto error;
+		}
+		ret = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to set mutexattr");
+			goto error;
+		}
+		ret = nccl_net_ofi_mutex_init(&ret_s_comm->cleanup_lock, &attr);
+		if (ret != 0) {
+			goto error;
+		}
+		ret = pthread_mutexattr_destroy(&attr);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to destroy mutexattr");
+			goto error;
+		}
+	}
 
 	/* Store communicator ID from handle in communicator */
 	if (OFI_UNLIKELY(handle->comm_id >= device->num_comm_ids)) {

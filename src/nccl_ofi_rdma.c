@@ -95,6 +95,8 @@ static size_t eager_max_size = 0;
 /* List of send comms undergoing deferred cleanup */
 static nccl_net_ofi_rdma_send_comm_t *s_comm_cleanup_list = NULL;
 static pthread_mutex_t s_comm_cleanup_list_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Number of open (not finalizing) send and recv comms */
+static int num_open_comms = 0;
 
 /* Function prototypes */
 static int send_progress(nccl_net_ofi_rdma_req_t *req);
@@ -3481,6 +3483,7 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 	}
 
 	/* Wait for close message to be delivered */
+	/* TODO don't block here */
 	nccl_net_ofi_rdma_req_state_t state = NCCL_OFI_RDMA_REQ_PENDING;
 	while (state == NCCL_OFI_RDMA_REQ_PENDING) {
 		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
@@ -3504,6 +3507,15 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 	r_comm->state = NCCL_OFI_RDMA_COMM_FINALIZED;
 
 	free(r_comm);
+
+	nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
+
+	assert(num_open_comms > 0);
+	num_open_comms--;
+	ret = comm_close_handler();
+
+	nccl_net_ofi_mutex_unlock(&s_comm_cleanup_list_lock);
+
  exit:
 	return ret;
 }
@@ -4193,6 +4205,10 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 			      l_comm->stage);
 		ret = -EINVAL;
 	}
+
+	nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
+	++num_open_comms;
+	nccl_net_ofi_mutex_unlock(&s_comm_cleanup_list_lock);
 
  exit:;
 	/* Close receive communicator in case listen operation failed */
@@ -5045,15 +5061,13 @@ static int send_comm_process_all_finalizing(void)
 	int ret = 0;
 
 	nccl_net_ofi_rdma_send_comm_t *s_comm = NULL, *tmp = NULL;
-
-	nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
 	DL_FOREACH_SAFE(s_comm_cleanup_list, s_comm, tmp) {
 
 		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
 			s_comm->base.base.ep;
 		ret = ofi_process_cq(ep);
 		if (ret != 0) {
-			goto unlock;
+			goto exit;
 		}
 
 		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
@@ -5066,13 +5080,40 @@ static int send_comm_process_all_finalizing(void)
 
 			ret = send_comm_destroy(s_comm);
 			if (ret != 0) {
-				goto unlock;
+				goto exit;
 			}
 		}
 	}
 
-unlock:
-	nccl_net_ofi_mutex_unlock(&s_comm_cleanup_list_lock);
+exit:
+	return ret;
+}
+
+/**
+ * To be called on every send or recv comm close. Processes all pending
+ * comms, and blocks for completion on the last comm close
+ *
+ * Note: caller must own the s_comm_cleanup_list_lock when calling
+ * this function
+ */
+static int comm_close_handler(void)
+{
+	int ret = 0;
+
+	while (s_comm_cleanup_list != NULL) {
+
+		ret = send_comm_process_all_finalizing();
+		if (ret != 0) {
+			goto exit;
+		}
+
+		/* This function is only blocking on last comm close */
+		if (num_open_comms > 0) {
+			break;
+		}
+	}
+
+exit:
 	return ret;
 }
 
@@ -5092,35 +5133,15 @@ static int send_close(nccl_net_ofi_send_comm_t *send_comm)
 
 	s_comm->comm_active = false;
 
-	/* Progress cq to (maybe) get close message */
-	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
-	ret = ofi_process_cq(ep);
-	if (ret != 0) {
-		goto exit;
-	}
+	nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
 
-	nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
-	bool received_close_message = s_comm->received_close_message;
-	nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
+	/* Defer cleanup until we receive the close message */
+	DL_APPEND(s_comm_cleanup_list, s_comm);
 
-	if (received_close_message) {
-		s_comm->state = NCCL_OFI_RDMA_COMM_FINALIZED;
-		ret = send_comm_destroy(s_comm);
-		if (ret != 0) {
-			goto exit;
-		}
-	} else {
-		/* Defer cleanup until we receive the close message */
-		nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
-		DL_APPEND(s_comm_cleanup_list, s_comm);
-		nccl_net_ofi_mutex_unlock(&s_comm_cleanup_list_lock);
-	}
-
-	/* Process any communicators that may be pending finalization */
-	ret = send_comm_process_all_finalizing();
-	if (ret != 0) {
-		goto exit;
-	}
+	assert(num_open_comms > 0);
+	num_open_comms--;
+	ret = comm_close_handler();
+	nccl_net_ofi_mutex_unlock(&s_comm_cleanup_list_lock);
 
  exit:
 	return ret;
@@ -5676,8 +5697,11 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		return -EINVAL;
 	};
 
-	*send_comm = &s_comm->base;
+	nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
+	++num_open_comms;
+	nccl_net_ofi_mutex_unlock(&s_comm_cleanup_list_lock);
 
+	*send_comm = &s_comm->base;
 	return ret;
 }
 

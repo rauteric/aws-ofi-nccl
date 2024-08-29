@@ -201,7 +201,7 @@ static inline nccl_net_ofi_rdma_ctrl_msg_t *get_bounce_ctrl_msg
 /*
  * Get close message from bounce buffer
  */
-static inline nccl_net_ofi_rdma_ctrl_msg_t *get_bounce_close_msg
+static inline nccl_net_ofi_rdma_close_msg_t *get_bounce_close_msg
 	(nccl_net_ofi_rdma_bounce_fl_item_t *bounce_fl_item)
 {
 	nccl_net_ofi_rdma_close_msg_t *close_msg =
@@ -1109,7 +1109,7 @@ static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm);
 static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rail_id, struct fi_cq_data_entry *cq_entry,
 				     nccl_net_ofi_rdma_req_t *bounce_req, bool eager)
 {
-	int ret;
+	int ret = 0;
 	rdma_req_bounce_data_t *bounce_data = NULL;
 	nccl_net_ofi_rdma_bounce_fl_item_t *bounce_fl_item = NULL;
 	nccl_ofi_rdma_connection_info_t *conn_msg = NULL;
@@ -1211,6 +1211,7 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rai
 		assert(cq_entry->len == sizeof(nccl_net_ofi_rdma_close_msg_t));
 		close_msg = get_bounce_close_msg(bounce_fl_item);
 		s_comm = get_send_comm(device, close_msg->send_comm_id);
+		assert(s_comm);
 
 		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
 		assert(s_comm->received_close_message == false);
@@ -1334,6 +1335,8 @@ static const char *req_type_str(nccl_net_ofi_rdma_req_type_t type)
 		return "RECV";
 	case NCCL_OFI_RDMA_SEND_CTRL:
 		return "SEND_CTRL";
+	case NCCL_OFI_RDMA_SEND_CLOSE:
+		return "SEND_CLOSE";
 	case NCCL_OFI_RDMA_RECV_SEGMS:
 		return "RECV_SEGMS";
 	case NCCL_OFI_RDMA_BOUNCE:
@@ -1364,6 +1367,8 @@ static const char *nccl_net_ofi_req_str(nccl_net_ofi_rdma_req_t *req)
 }
 
 static int post_rdma_ctrl(nccl_net_ofi_rdma_req_t *req);
+
+static int post_close_msg(nccl_net_ofi_rdma_req_t *req);
 
 static int post_flush_req(nccl_net_ofi_rdma_req_t *req);
 
@@ -3342,6 +3347,13 @@ static int recv_comm_destroy_resources(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 
 	nccl_net_ofi_rdma_device_t *device = (nccl_net_ofi_rdma_device_t*)base_ep->device;
 
+	if (r_comm->send_close_req != NULL) {
+		ret = r_comm->send_close_req->free(r_comm->send_close_req, false);
+		if (ret != 0) {
+			goto exit;
+		}
+	}
+
 	if (is_flush_buff_enabled()) {
 		ret = dealloc_and_dereg_flush_buff(r_comm, device);
 		if (ret != 0) {
@@ -3385,10 +3397,121 @@ static int recv_comm_destroy_resources(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 		goto exit;
 	}
 
-	if (r_comm->send_close_req != NULL) {
-		ret = r_comm->send_close_req->free(r_comm->send_close_req, false);
+	free(r_comm);
+
+exit:
+	return ret;
+}
+
+static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
+{
+	int ret = 0;
+
+	/* Release connect response request if available */
+	if (s_comm->conn_resp_req) {
+		nccl_net_ofi_rdma_req_t *req = s_comm->conn_resp_req;
+		req->free(req, false);
+	}
+
+	/* Release request freelist */
+	ret = nccl_ofi_freelist_fini(s_comm->nccl_ofi_reqs_fl);
+	if (ret != 0) {
+		NCCL_OFI_WARN("Call to nccl_ofi_freelist_fini failed: %d", ret);
+		goto exit;
+	}
+
+	if (!nccl_ofi_msgbuff_destroy(s_comm->msgbuff)) {
+		NCCL_OFI_WARN("Failed to destroy msgbuff (s_comm)");
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *) s_comm->base.base.ep;
+	nccl_net_ofi_rdma_device_t *device = get_device_from_ep(ep);
+	set_comm(device, s_comm->local_comm_id, NULL);
+
+	/* Release communicator ID */
+	ret = nccl_ofi_idpool_free_id(device->comm_idpool, s_comm->local_comm_id);
+	if (OFI_UNLIKELY(ret != 0)) {
+		NCCL_OFI_WARN("Error freeing communicator ID %"PRIu32"", s_comm->local_comm_id);
+		goto exit;
+	}
+
+	/* Destroy domain */
+#if HAVE_NVTX_TRACING && NCCL_OFI_NVTX_TRACE_PER_COMM
+	for (int i = 0; i < NCCL_OFI_N_NVTX_DOMAIN_PER_COMM; ++i) {
+		nvtxDomainDestroy(s_comm->nvtx_domain[i]);
+	}
+#endif
+
+	ret = nccl_net_ofi_mutex_destroy(&s_comm->receive_close_lock);
+	if (ret != 0) {
+		goto exit;
+	}
+
+	free(s_comm);
+
+exit:
+	return ret;
+}
+
+/**
+ * Process all finalizing s_comm's, and free if done
+ */
+static int send_comm_process_all_finalizing(void)
+{
+	int ret = 0;
+
+	nccl_net_ofi_rdma_send_comm_t *s_comm = NULL, *tmp = NULL;
+	DL_FOREACH_SAFE(s_comm_cleanup_list, s_comm, tmp) {
+
+		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
+			s_comm->base.base.ep;
+		ret = ofi_process_cq(ep);
 		if (ret != 0) {
 			goto exit;
+		}
+
+		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
+		bool received_close_message = s_comm->received_close_message;
+		nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
+
+		if (received_close_message) {
+			s_comm->state = NCCL_OFI_RDMA_COMM_FINALIZED;
+			DL_DELETE(s_comm_cleanup_list, s_comm);
+
+			ret = send_comm_destroy(s_comm);
+			if (ret != 0) {
+				goto exit;
+			}
+		}
+	}
+
+exit:
+	return ret;
+}
+
+/**
+ * To be called on every send or recv comm close. Processes all pending
+ * comms, and blocks for completion on the last comm close
+ *
+ * Note: caller must own the s_comm_cleanup_list_lock when calling
+ * this function
+ */
+static int comm_close_handler(void)
+{
+	int ret = 0;
+
+	while (s_comm_cleanup_list != NULL) {
+
+		ret = send_comm_process_all_finalizing();
+		if (ret != 0) {
+			goto exit;
+		}
+
+		/* This function is only blocking on last comm close */
+		if (num_open_comms > 0) {
+			break;
 		}
 	}
 
@@ -3422,8 +3545,8 @@ static inline int insert_send_close_req(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 		send_close_req->free(send_close_req, false);
 		return -ENOMEM;
 	} else if (OFI_UNLIKELY(send_close_data->ctrl_schedule->num_xfer_infos != 1)) {
-		NCCL_OFI_WARN("Invalid schedule for outgoing control message (%zu bytes). Expected one rail, but got %zu",
-			      size,
+		NCCL_OFI_WARN("Invalid schedule for outgoing close message (%zu bytes). Expected one rail, but got %zu",
+			      sizeof(nccl_net_ofi_rdma_close_msg_t),
 			      send_close_data->ctrl_schedule->num_xfer_infos);
 		send_close_req->free(send_close_req, false);
 		return -EINVAL;
@@ -3449,19 +3572,6 @@ static inline int insert_send_close_req(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 	return 0;
 }
 
-static int recv_comm_send_close_msg(nccl_net_ofi_rdma_recv_comm_t *r_comm)
-{
-	int ret = insert_send_close_req(r_comm);
-	if (ret != 0) {
-		return ret;
-	}
-
-	int ret = receive_progress(r_comm->send_close_req, true);
-	if (ret != 0) {
-		return ret;
-	}
-}
-
 static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 {
 	nccl_net_ofi_rdma_recv_comm_t *r_comm =
@@ -3477,7 +3587,13 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 
 	r_comm->comm_active = false;
 
-	ret = recv_comm_send_close_msg(r_comm);
+	ret = insert_send_close_req(r_comm);
+	if (ret != 0) {
+		goto exit;
+	}
+
+	/* Send close message */
+	ret = receive_progress(r_comm->send_close_req, true);
 	if (ret != 0) {
 		goto exit;
 	}
@@ -3503,10 +3619,9 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 		goto exit;
 	}
 
-	ret = recv_comm_destroy_resources(r_comm);
 	r_comm->state = NCCL_OFI_RDMA_COMM_FINALIZED;
 
-	free(r_comm);
+	ret = recv_comm_destroy_resources(r_comm);
 
 	nccl_net_ofi_mutex_lock(&s_comm_cleanup_list_lock);
 
@@ -4653,7 +4768,6 @@ static int post_close_msg(nccl_net_ofi_rdma_req_t *req)
 	nccl_net_ofi_rdma_recv_comm_t *r_comm = (nccl_net_ofi_rdma_recv_comm_t *)req->comm;
 	rdma_req_send_close_data_t *send_close_data = get_send_close_data(req);
 	nccl_net_ofi_schedule_t *schedule = send_close_data->ctrl_schedule;
-	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 
 	assert(schedule != NULL);
 
@@ -4998,122 +5112,6 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 		req->free(req, false);
 	*base_req = NULL;
  exit:
-	return ret;
-}
-
-static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
-{
-	int ret = 0;
-
-	/* Release connect response request if available */
-	if (s_comm->conn_resp_req) {
-		nccl_net_ofi_rdma_req_t *req = s_comm->conn_resp_req;
-		req->free(req, false);
-	}
-
-	/* Release request freelist */
-	ret = nccl_ofi_freelist_fini(s_comm->nccl_ofi_reqs_fl);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Call to nccl_ofi_freelist_fini failed: %d", ret);
-		goto exit;
-	}
-
-	if (!nccl_ofi_msgbuff_destroy(s_comm->msgbuff)) {
-		NCCL_OFI_WARN("Failed to destroy msgbuff (s_comm)");
-		ret = -EINVAL;
-		goto exit;
-	}
-
-	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *) s_comm->base.base.ep;
-	nccl_net_ofi_rdma_device_t *device = get_device_from_ep(ep);
-	set_comm(device, s_comm->local_comm_id, NULL);
-
-	/* Release communicator ID */
-	ret = nccl_ofi_idpool_free_id(device->comm_idpool, s_comm->local_comm_id);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Error freeing communicator ID %"PRIu32"", s_comm->local_comm_id);
-		goto exit;
-	}
-
-	/* Destroy domain */
-#if HAVE_NVTX_TRACING && NCCL_OFI_NVTX_TRACE_PER_COMM
-	for (int i = 0; i < NCCL_OFI_N_NVTX_DOMAIN_PER_COMM; ++i) {
-		nvtxDomainDestroy(s_comm->nvtx_domain[i]);
-	}
-#endif
-
-	ret = nccl_net_ofi_mutex_destroy(&s_comm->receive_close_lock);
-	if (ret != 0) {
-		goto unlock;
-	}
-
-	free(s_comm);
-
-exit:
-	return ret;
-}
-
-/**
- * Process all finalizing s_comm's, and free if done
- */
-static int send_comm_process_all_finalizing(void)
-{
-	int ret = 0;
-
-	nccl_net_ofi_rdma_send_comm_t *s_comm = NULL, *tmp = NULL;
-	DL_FOREACH_SAFE(s_comm_cleanup_list, s_comm, tmp) {
-
-		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
-			s_comm->base.base.ep;
-		ret = ofi_process_cq(ep);
-		if (ret != 0) {
-			goto exit;
-		}
-
-		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
-		bool received_close_message = s_comm->received_close_message;
-		nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
-
-		if (received_close_message) {
-			s_comm->state = NCCL_OFI_RDMA_COMM_FINALIZED;
-			DL_DELETE(s_comm_cleanup_list, s_comm);
-
-			ret = send_comm_destroy(s_comm);
-			if (ret != 0) {
-				goto exit;
-			}
-		}
-	}
-
-exit:
-	return ret;
-}
-
-/**
- * To be called on every send or recv comm close. Processes all pending
- * comms, and blocks for completion on the last comm close
- *
- * Note: caller must own the s_comm_cleanup_list_lock when calling
- * this function
- */
-static int comm_close_handler(void)
-{
-	int ret = 0;
-
-	while (s_comm_cleanup_list != NULL) {
-
-		ret = send_comm_process_all_finalizing();
-		if (ret != 0) {
-			goto exit;
-		}
-
-		/* This function is only blocking on last comm close */
-		if (num_open_comms > 0) {
-			break;
-		}
-	}
-
-exit:
 	return ret;
 }
 

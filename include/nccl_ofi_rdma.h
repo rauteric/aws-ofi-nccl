@@ -177,7 +177,7 @@ typedef struct nccl_net_ofi_rdma_ctrl_fl_item {
 	union {
 		nccl_net_ofi_rdma_ctrl_msg_t ctrl_msg;
 		nccl_net_ofi_rdma_close_msg_t close_msg;
-	}
+	};
 } nccl_net_ofi_rdma_ctrl_fl_item_t;
 
 /* For LL/LL128 protocols, bounce buffers (source of RDMA read operations) need to be 128B aligned */

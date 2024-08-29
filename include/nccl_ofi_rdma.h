@@ -581,6 +581,9 @@ typedef struct nccl_net_ofi_rdma_recv_comm {
 #endif
 
 	nccl_net_ofi_rdma_req_t *send_close_req;
+	/* For storing in cleanup list */
+	struct nccl_net_ofi_rdma_recv_comm *prev;
+	struct nccl_net_ofi_rdma_recv_comm *next;
 
 	/* Number of rails */
 	int num_rails;

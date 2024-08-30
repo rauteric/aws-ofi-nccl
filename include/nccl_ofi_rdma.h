@@ -508,8 +508,12 @@ typedef struct nccl_net_ofi_rdma_send_comm {
 	/* For storing in cleanup list */
 	struct nccl_net_ofi_rdma_send_comm *prev;
 	struct nccl_net_ofi_rdma_send_comm *next;
+
 	pthread_mutex_t receive_close_lock;
 	bool received_close_message;
+	/* Counters for total sent and received control messages */
+	uint64_t n_ctrl_received;
+	uint64_t n_ctrl_expected;
 
 	/* Array of `num_rails` communicator rails */
 	nccl_net_ofi_rdma_send_comm_rail_t rails[];
@@ -584,6 +588,11 @@ typedef struct nccl_net_ofi_rdma_recv_comm {
 	/* For storing in cleanup list */
 	struct nccl_net_ofi_rdma_recv_comm *prev;
 	struct nccl_net_ofi_rdma_recv_comm *next;
+
+	/* Counters for total sent and received control messages */
+	pthread_mutex_t ctrl_counter_lock;
+	uint64_t n_ctrl_sent;
+	uint64_t n_ctrl_delivered;
 
 	/* Number of rails */
 	int num_rails;

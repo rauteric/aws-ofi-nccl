@@ -719,6 +719,13 @@ static inline int set_send_ctrl_completed(nccl_net_ofi_rdma_req_t *req)
 
 	nccl_net_ofi_mutex_unlock(&req->req_lock);
 
+	assert(recv_req->comm->type == NCCL_NET_OFI_RECV_COMM);
+	nccl_net_ofi_rdma_recv_comm_t *r_comm =
+		(nccl_net_ofi_rdma_recv_comm_t *)recv_req->comm;
+	nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
+	r_comm->n_ctrl_delivered += 1;
+	nccl_net_ofi_mutex_unlock(&r_comm->ctrl_counter_lock);
+
 	/* Add completion to parent request */
 	return inc_req_completion(recv_req, 0, recv_data->total_num_compls);
 }
@@ -911,6 +918,10 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
 	nccl_ofi_msgbuff_result_t mb_res = nccl_ofi_msgbuff_insert(s_comm->msgbuff, msg_seq_num,
 		bounce_req, NCCL_OFI_MSGBUFF_BUFF, &stat);
+
+	nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
+	s_comm->n_ctrl_received += 1;
+	nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
 
 	if (mb_res == NCCL_OFI_MSGBUFF_SUCCESS) {
 		/* Inserted! In this case sender has not yet called send() for this message, so
@@ -1217,6 +1228,7 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rai
 		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
 		assert(s_comm->received_close_message == false);
 		s_comm->received_close_message = true;
+		s_comm->n_ctrl_expected = close_msg->ctrl_counter;
 		nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
 
 		break;
@@ -3202,6 +3214,9 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 		/* TODO: Remove req from message buffer */
 		goto error;
 	}
+	nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
+	r_comm->n_ctrl_sent += 1;
+	nccl_net_ofi_mutex_unlock(&r_comm->ctrl_counter_lock);
 
 	if (eager) {
 		if (recv_data->eager_copy_req == NULL) {
@@ -3398,6 +3413,11 @@ static int recv_comm_destroy_resources(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 		goto exit;
 	}
 
+	ret = nccl_net_ofi_mutex_destroy(&r_comm->ctrl_counter_lock);
+	if (ret != 0) {
+		goto exit;
+	}
+
 	free(r_comm);
 
 exit:
@@ -3519,10 +3539,13 @@ static int send_comm_process_all_finalizing(void)
 		}
 
 		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
-		bool received_close_message = s_comm->received_close_message;
+
+		bool ready_to_destroy = (s_comm->received_close_message) &&
+			(s_comm->n_ctrl_received == s_comm->n_ctrl_expected);
+
 		nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
 
-		if (received_close_message) {
+		if (ready_to_destroy) {
 			s_comm->state = NCCL_OFI_RDMA_COMM_FINALIZED;
 			DL_DELETE(s_comm_cleanup_list, s_comm);
 
@@ -3623,6 +3646,15 @@ static inline int insert_send_close_req(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 	return 0;
 }
 
+static inline void set_close_msg_counter(nccl_net_ofi_rdma_recv_comm_t *r_comm)
+{
+	rdma_req_send_close_data_t *send_close_data =
+		get_send_close_data(r_comm->send_close_req);
+	nccl_net_ofi_rdma_close_msg_t *close_msg =
+		&send_close_data->ctrl_fl_item->close_msg;
+	close_msg->ctrl_counter = r_comm->n_ctrl_delivered;
+}
+
 static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 {
 	nccl_net_ofi_rdma_recv_comm_t *r_comm =
@@ -3642,6 +3674,8 @@ static int recv_close(nccl_net_ofi_recv_comm_t *recv_comm)
 	if (ret != 0) {
 		goto exit;
 	}
+
+	set_close_msg_counter(r_comm);
 
 	/* Send close message */
 	ret = receive_progress(r_comm->send_close_req, true);
@@ -3880,6 +3914,13 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	r_comm->send_close_req = NULL;
 	r_comm->prev = NULL;
 	r_comm->next = NULL;
+	ret = nccl_net_ofi_mutex_init(&r_comm->ctrl_counter_lock, NULL);
+	if (ret != 0) {
+		goto error;
+	}
+	r_comm->n_ctrl_sent = 0;
+	r_comm->n_ctrl_delivered = 0;
+
 
 	/* Allocate recv communicator ID */
 	int comm_id = nccl_ofi_idpool_allocate_id(device->comm_idpool);
@@ -5371,8 +5412,14 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->next_msg_seq_num = 0;
 	ret_s_comm->prev = NULL;
 	ret_s_comm->next = NULL;
+
+	ret = nccl_net_ofi_mutex_init(&ret_s_comm->receive_close_lock, NULL);
+	if (ret != 0) {
+		goto error;
+	}
 	ret_s_comm->received_close_message = false;
-	nccl_net_ofi_mutex_init(&ret_s_comm->receive_close_lock, NULL);
+	ret_s_comm->n_ctrl_received = 0;
+	ret_s_comm->n_ctrl_expected = 0;
 
 	/* Store communicator ID from handle in communicator */
 	if (OFI_UNLIKELY(handle->comm_id >= device->num_comm_ids)) {

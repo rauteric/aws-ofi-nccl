@@ -919,10 +919,6 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 	nccl_ofi_msgbuff_result_t mb_res = nccl_ofi_msgbuff_insert(s_comm->msgbuff, msg_seq_num,
 		bounce_req, NCCL_OFI_MSGBUFF_BUFF, &stat);
 
-	nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
-	s_comm->n_ctrl_received += 1;
-	nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
-
 	if (mb_res == NCCL_OFI_MSGBUFF_SUCCESS) {
 		/* Inserted! In this case sender has not yet called send() for this message, so
 		   return success and initiate RDMA write when sender calls send(). */
@@ -1113,6 +1109,32 @@ static inline int handle_eager_recv(nccl_net_ofi_rdma_recv_comm_t *r_comm,
 
 static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm);
 
+static int handle_close_msg_recv(nccl_net_ofi_rdma_req_t *bounce_req)
+{
+	assert(bounce_req->type == NCCL_OFI_RDMA_BOUNCE);
+
+	rdma_req_bounce_data_t *bounce_data = get_bounce_data(bounce_req);
+
+	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
+	nccl_net_ofi_rdma_device_t *device = get_device_from_ep(ep);
+
+	nccl_net_ofi_rdma_close_msg_t *close_msg =
+		get_bounce_close_msg(bounce_data->bounce_fl_item);
+
+	nccl_net_ofi_rdma_send_comm_t *s_comm = get_send_comm(device, close_msg->send_comm_id);
+	assert(s_comm);
+
+	nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
+
+	assert(s_comm->received_close_message == false);
+	s_comm->received_close_message = true;
+	s_comm->n_ctrl_expected = close_msg->ctrl_counter;
+
+	nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
+
+	return repost_bounce_buff(ep, bounce_req);
+}
+
 /**
  * @brief	Handle receiving a bounce buffer message. These are:
  * 		connect messages (l_comm), connect response messages (s_comm),
@@ -1127,7 +1149,6 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rai
 	nccl_ofi_rdma_connection_info_t *conn_msg = NULL;
 	nccl_ofi_rdma_connection_info_t *conn_resp_msg = NULL;
 	nccl_net_ofi_rdma_ctrl_msg_t *ctrl_msg = NULL;
-	nccl_net_ofi_rdma_close_msg_t *close_msg = NULL;
 	nccl_net_ofi_rdma_listen_comm_t *l_comm = NULL;
 	nccl_net_ofi_rdma_send_comm_t *s_comm = NULL;
 	nccl_net_ofi_rdma_recv_comm_t *r_comm = NULL;
@@ -1218,18 +1239,18 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rai
 		if (OFI_UNLIKELY(ret != 0)) {
 			goto exit;
 		}
+
+		/* Note: this increment needs to be last, as s_comm may be
+		   closed after this */
+		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
+		s_comm->n_ctrl_received += 1;
+		nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
+
 		break;
 	case NCCL_OFI_RDMA_MSG_CLOSE:
 		assert(cq_entry->len == sizeof(nccl_net_ofi_rdma_close_msg_t));
-		close_msg = get_bounce_close_msg(bounce_fl_item);
-		s_comm = get_send_comm(device, close_msg->send_comm_id);
-		assert(s_comm);
 
-		nccl_net_ofi_mutex_lock(&s_comm->receive_close_lock);
-		assert(s_comm->received_close_message == false);
-		s_comm->received_close_message = true;
-		s_comm->n_ctrl_expected = close_msg->ctrl_counter;
-		nccl_net_ofi_mutex_unlock(&s_comm->receive_close_lock);
+		ret = handle_close_msg_recv(bounce_req);
 
 		break;
 	case NCCL_OFI_RDMA_MSG_EAGER:
@@ -3551,14 +3572,19 @@ static int recv_comm_process_all_finalizing(void)
 
 		if (r_comm->send_close_req == NULL) {
 			/* Waiting for all ctrls to complete */
-			if (r_comm->n_ctrl_delivered == r_comm->n_ctrl_sent) {
+			nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
+			bool all_ctrl_msgs_delivered =
+				(r_comm->n_ctrl_delivered == r_comm->n_ctrl_sent);
+			nccl_net_ofi_mutex_unlock(&r_comm->ctrl_counter_lock);
+
+			if (all_ctrl_msgs_delivered) {
+				/* Send close message */
 
 				ret = insert_send_close_req(r_comm);
 				if (ret != 0) {
 					goto exit;
 				}
 
-				/* Send close message */
 				ret = receive_progress(r_comm->send_close_req, true);
 				if (ret != 0) {
 					goto exit;

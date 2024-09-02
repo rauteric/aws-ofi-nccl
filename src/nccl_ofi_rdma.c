@@ -3917,6 +3917,12 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 		goto error;
 	}
 
+	ret = nccl_net_ofi_mutex_init(&r_comm->ctrl_counter_lock, NULL);
+	if (ret != 0) {
+		free(r_comm);
+		return NULL;
+	}
+
 	r_comm->base.base.type = NCCL_NET_OFI_RECV_COMM;
 	r_comm->base.base.dev_id = dev_id;
 	r_comm->base.regMr = reg_mr_recv_comm;
@@ -3929,10 +3935,6 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 	r_comm->send_close_req = NULL;
 	r_comm->prev = NULL;
 	r_comm->next = NULL;
-	ret = nccl_net_ofi_mutex_init(&r_comm->ctrl_counter_lock, NULL);
-	if (ret != 0) {
-		goto error;
-	}
 	r_comm->n_ctrl_sent = 0;
 	r_comm->n_ctrl_delivered = 0;
 
@@ -4097,6 +4099,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_device
 				NCCL_OFI_WARN("Error freeing communicator ID %"PRIu32"", r_comm->local_comm_id);
 			}
 		}
+		nccl_net_ofi_mutex_destroy(&r_comm->ctrl_counter_lock);
 		free(r_comm);
 	}
 
@@ -5414,6 +5417,12 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 		return -ENOMEM;
 	}
 
+	ret = nccl_net_ofi_mutex_init(&ret_s_comm->receive_close_lock, NULL);
+	if (ret != 0) {
+		free(ret_s_comm);
+		return ret;
+	}
+
 	ret_s_comm->base.base.type = NCCL_NET_OFI_SEND_COMM;
 	ret_s_comm->base.base.ep = &ep->base;
 	ret_s_comm->base.base.dev_id = dev_id;
@@ -5427,10 +5436,6 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->prev = NULL;
 	ret_s_comm->next = NULL;
 
-	ret = nccl_net_ofi_mutex_init(&ret_s_comm->receive_close_lock, NULL);
-	if (ret != 0) {
-		goto error;
-	}
 	ret_s_comm->received_close_message = false;
 	ret_s_comm->n_ctrl_received = 0;
 	ret_s_comm->n_ctrl_expected = 0;
@@ -5512,12 +5517,16 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 
 
  error:
-	if (ret_s_comm && ~0 != ret_s_comm->local_comm_id) {
-		if (0 != nccl_ofi_idpool_free_id(device->comm_idpool, ret_s_comm->local_comm_id)) {
-			NCCL_OFI_WARN("Error freeing communicator ID %"PRIu32"", ret_s_comm->local_comm_id);
+
+	if (ret_s_comm) {
+		if (~0 != ret_s_comm->local_comm_id) {
+			if (0 != nccl_ofi_idpool_free_id(device->comm_idpool, ret_s_comm->local_comm_id)) {
+				NCCL_OFI_WARN("Error freeing communicator ID %"PRIu32"", ret_s_comm->local_comm_id);
+			}
 		}
+		nccl_net_ofi_mutex_destroy(&ret_s_comm->receive_close_lock);
+		free(ret_s_comm);
 	}
-	free(ret_s_comm);
 
 	return ret;
 }

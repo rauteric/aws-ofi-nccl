@@ -474,6 +474,11 @@ typedef struct nccl_net_ofi_rdma_send_comm {
 	nvtxDomainHandle_t nvtx_domain[NCCL_OFI_N_NVTX_DOMAIN_PER_COMM];
 #endif
 
+
+	/* For storing in cleanup list */
+	struct nccl_net_ofi_rdma_send_comm *prev;
+	struct nccl_net_ofi_rdma_send_comm *next;
+
 	/* Array of `num_rails` communicator rails */
 	nccl_net_ofi_rdma_send_comm_rail_t rails[];
 
@@ -542,6 +547,10 @@ typedef struct nccl_net_ofi_rdma_recv_comm {
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[NCCL_OFI_N_NVTX_DOMAIN_PER_COMM];
 #endif
+
+	/* For storing in cleanup list */
+	struct nccl_net_ofi_rdma_recv_comm *prev;
+	struct nccl_net_ofi_rdma_recv_comm *next;
 
 	/* Number of rails */
 	int num_rails;

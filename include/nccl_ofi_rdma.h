@@ -260,8 +260,7 @@ typedef struct {
 	 * pointer to reference it when transferring the buffer over
 	 * network. */
 	nccl_net_ofi_schedule_t *ctrl_schedule;
-	/* Pointer to recv parent request */
-	nccl_net_ofi_rdma_req_t *recv_req;
+
 #if HAVE_NVTX_TRACING
 	nvtxRangeId_t trace_id;
 #endif
@@ -304,8 +303,6 @@ typedef struct {
 	size_t dst_len;
 	/* Mr handle for destination buffer */
 	nccl_net_ofi_rdma_mr_handle_t *dest_mr_handle;
-	/* Pointer to send control message child request */
-	nccl_net_ofi_rdma_req_t *send_ctrl_req;
 	/* Pointer to receive segments child request */
 	nccl_net_ofi_rdma_req_t *recv_segms_req;
 	/* (Eager messages) pointer to eager local copy request */

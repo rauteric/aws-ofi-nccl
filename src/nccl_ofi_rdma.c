@@ -3308,6 +3308,8 @@ static int recv_comm_destroy(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 
 	free(r_comm);
 
+	ret = base_ep->release_ep(base_ep);
+
 exit:
 	return ret;
 }
@@ -3354,6 +3356,8 @@ static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
 #endif
 
 	free(s_comm);
+
+	ret = ep->base.release_ep(&ep->base);
 
 exit:
 	return ret;

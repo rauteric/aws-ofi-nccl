@@ -162,6 +162,63 @@ unlock:
 	return 0;
 }
 
+/*
+ * Remove the given element from the deque
+ */
+static inline void nccl_ofi_deque_remove(nccl_ofi_deque_t *deque, nccl_ofi_deque_elem_t *deque_elem)
+{
+	assert(deque);
+	assert(deque_elem);
+
+	nccl_net_ofi_mutex_lock(&deque->lock);
+
+	deque_elem->prev->next = deque_elem->next;
+	deque_elem->next->prev = deque_elem->prev;
+
+	/* Reset deque_elem pointers to avoid dangling pointers */
+	deque_elem->prev = NULL;
+	deque_elem->next = NULL;
+
+	nccl_net_ofi_mutex_unlock(&deque->lock);
+}
+
+static inline nccl_ofi_deque_elem_t *nccl_ofi_deque_get_front(nccl_ofi_deque_t *deque)
+{
+	assert(deque);
+
+	nccl_ofi_deque_elem_t *ret_elem = NULL;
+
+	nccl_net_ofi_mutex_lock(&deque->lock);
+
+	if (nccl_ofi_deque_isempty(deque)) {
+		ret_elem = NULL;
+	} else {
+		ret_elem = deque->head.next;
+	}
+
+	nccl_net_ofi_mutex_unlock(&deque->lock);
+	return ret_elem;
+}
+
+static inline nccl_ofi_deque_elem_t *nccl_ofi_deque_get_next(nccl_ofi_deque_t *deque, nccl_ofi_deque_elem_t *deque_elem)
+{
+	assert(deque);
+	assert(deque_elem);
+
+	nccl_ofi_deque_elem_t *ret_elem = NULL;
+
+	nccl_net_ofi_mutex_lock(&deque->lock);
+
+	ret_elem = deque_elem->next;
+	if (ret_elem == (&deque->head)) {
+		ret_elem = NULL;
+	}
+
+	nccl_net_ofi_mutex_unlock(&deque->lock);
+
+	return ret_elem;
+}
+
 #ifdef _cplusplus
 } // End extern "C"
 #endif

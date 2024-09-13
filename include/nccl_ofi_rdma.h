@@ -712,8 +712,8 @@ struct nccl_net_ofi_rdma_ep {
 	/* Pending requests queue */
 	nccl_ofi_deque_t *pending_reqs_queue;
 
-	/* Free list of bounce buffers */
-	nccl_ofi_freelist_t *bounce_buff_fl;
+	/* Free list of bounce buffers (ctrl rail) */
+	nccl_ofi_freelist_t *bounce_buff_ctrl_fl;
 	/* Free list of bounce buffer requests */
 	nccl_ofi_freelist_t *bounce_buff_reqs_fl;
 	/* Size of bounce buffers */

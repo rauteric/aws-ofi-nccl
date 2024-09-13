@@ -2085,7 +2085,7 @@ static inline int free_bounce_req(nccl_net_ofi_rdma_req_t *req,
 	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
 	/* Free buffer */
 	if (bounce_data->bounce_fl_elem) {
-		nccl_ofi_freelist_entry_free_mr(ep->bounce_buff_fl, bounce_data->bounce_fl_elem);
+		nccl_ofi_freelist_entry_free_mr(ep->bounce_buff_ctrl_fl, bounce_data->bounce_fl_elem);
 	}
 	return free_base_req(NULL, ep->bounce_buff_reqs_fl, req, false);
 }
@@ -2104,7 +2104,7 @@ static inline nccl_net_ofi_rdma_req_t *alloc_bounce_req(nccl_net_ofi_rdma_ep_t *
 	rdma_req_bounce_data_t *bounce_data = get_bounce_data(req);
 
 	nccl_ofi_freelist_elem_t *bounce_fl_elem =
-		nccl_ofi_freelist_entry_alloc_mr(ep->bounce_buff_fl);
+		nccl_ofi_freelist_entry_alloc_mr(ep->bounce_buff_ctrl_fl);
 	if (!bounce_fl_elem) {
 		NCCL_OFI_WARN("Failed to allocate bounce_fl_elem");
 		req->free(req, false);
@@ -5088,7 +5088,7 @@ static int post_bounce_buffer(nccl_net_ofi_rdma_req_t *req,
 	 * accessible but undefined to cover cases where the buffer
 	 * gets re-posted */
  	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
-	nccl_ofi_freelist_entry_set_undefined(ep->bounce_buff_fl,
+	nccl_ofi_freelist_entry_set_undefined(ep->bounce_buff_ctrl_fl,
 					      bounce_fl_elem->ptr);
 
 	req->state = NCCL_OFI_RDMA_REQ_CREATED;
@@ -5716,7 +5716,7 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 	ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
 					ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
 					freelist_regmr_host_fn, freelist_deregmr_host_fn,
-					ep, false, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_fl);
+					ep, false, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_ctrl_fl);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Failed to init bounce_buff_fl");
 		if (nccl_ofi_freelist_fini(ep->bounce_buff_reqs_fl))
@@ -5765,7 +5765,7 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 static inline int fini_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 {
 	int ret = 0;
-	ret = nccl_ofi_freelist_fini(ep->bounce_buff_fl);
+	ret = nccl_ofi_freelist_fini(ep->bounce_buff_ctrl_fl);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Failed to fini bounce_buff_fl");
 		return ret;

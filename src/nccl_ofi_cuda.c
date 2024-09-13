@@ -16,6 +16,8 @@ CUresult (*nccl_net_ofi_cuDriverGetVersion)(int *driverVersion) = NULL;
 CUresult (*nccl_net_ofi_cuPointerGetAttribute)(void *data, CUpointer_attribute attribute, CUdeviceptr ptr) = NULL;
 CUresult (*nccl_net_ofi_cuCtxGetDevice)(CUdevice *device) = NULL;
 CUresult (*nccl_net_ofi_cuDeviceGetCount)(int *count) = NULL;
+CUresult (*nccl_net_ofi_cuMemAlloc)(CUdeviceptr *dptr, size_t bytesize) = NULL;
+CUresult (*nccl_net_ofi_cuMemFree)(CUdeviceptr dptr) = NULL;
 #if CUDA_VERSION >= 11030
 CUresult (*nccl_net_ofi_cuFlushGPUDirectRDMAWrites)(CUflushGPUDirectRDMAWritesTarget target,
 						    CUflushGPUDirectRDMAWritesScope scope) = NULL;
@@ -59,6 +61,8 @@ nccl_net_ofi_cuda_init(void)
 	LOAD_SYM(cuPointerGetAttribute);
 	LOAD_SYM(cuCtxGetDevice);
 	LOAD_SYM(cuDeviceGetCount);
+	LOAD_SYM(cuMemAlloc);
+	LOAD_SYM(cuMemFree);
 #if CUDA_VERSION >= 11030
 	LOAD_SYM(cuFlushGPUDirectRDMAWrites);
 #endif

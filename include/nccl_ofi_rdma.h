@@ -714,6 +714,8 @@ struct nccl_net_ofi_rdma_ep {
 
 	/* Free list of bounce buffers (ctrl rail) */
 	nccl_ofi_freelist_t *bounce_buff_ctrl_fl;
+	/* Free list of bounce buffers (data rails) */
+	nccl_ofi_freelist_t *bounce_buff_data_fl;
 	/* Free list of bounce buffer requests */
 	nccl_ofi_freelist_t *bounce_buff_reqs_fl;
 	/* Size of bounce buffers */

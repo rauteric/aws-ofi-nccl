@@ -5724,6 +5724,11 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 		return ret;
 	}
 
+	ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
+					ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
+					freelist_regmr_host_fn, freelist_deregmr_host_fn,
+					ep, false, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_data_fl);
+
 	/*
 	 * The *_bounce_posted limits are used in the progress engine to
 	 * determine if the receive queue is hydrated with sufficient buffers.

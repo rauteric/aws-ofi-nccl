@@ -129,6 +129,37 @@ int nccl_net_ofi_dealloc_mr_buffer(void *ptr, size_t size)
 	return ret;
 }
 
+int nccl_net_ofi_alloc_gpu_mr_buffer(size_t size, void **ptr)
+{
+	assert(system_page_size > 0);
+	assert(NCCL_OFI_IS_ALIGNED(size, system_page_size));
+
+	CUdeviceptr dptr;
+	CUresult r = nccl_net_ofi_cuMemAlloc(&dptr, size);
+	if (r != CUDA_SUCCESS) {
+		NCCL_OFI_WARN("Unable to allocate CUDA memory");
+		*ptr = NULL;
+		return -ENOMEM;
+	}
+	*ptr = (void *)dptr;
+	/* TODO why is this true? */
+	assert(NCCL_OFI_IS_PTR_ALIGNED(*ptr, system_page_size));
+	return 0;
+}
+
+int nccl_net_ofi_dealloc_gpu_mr_buffer(void *ptr, size_t size)
+{
+	assert(NCCL_OFI_IS_PTR_ALIGNED(ptr, system_page_size));
+	assert(NCCL_OFI_IS_ALIGNED(size, system_page_size));
+
+	CUresult r = nccl_net_ofi_cuMemFree((CUdeviceptr)ptr);
+	if (r != CUDA_SUCCESS) {
+		NCCL_OFI_WARN("Unable to deallocate CUDA memory");
+		return -EIO;
+	}
+
+	return 0;
+}
 
 int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 {

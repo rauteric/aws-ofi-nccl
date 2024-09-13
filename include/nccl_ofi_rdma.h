@@ -189,6 +189,7 @@ typedef struct nccl_net_ofi_ep_rail nccl_net_ofi_ep_rail_t;
 typedef struct {
 	/* Bounce buffer freelist item */
 	nccl_ofi_freelist_elem_t *bounce_fl_elem;
+
 	/* Length of bounce buffer */
 	size_t buff_len;
 	/* Length of received data */
@@ -668,6 +669,8 @@ struct nccl_net_ofi_ep_rail {
 	size_t max_bounce_posted;
 	/* Mutex for bounce buffer operations */
 	pthread_mutex_t bounce_mutex;
+	/* Back-pointer to associated buffer freelist */
+	nccl_ofi_freelist_t *bounce_buff_fl;
 };
 
 /*

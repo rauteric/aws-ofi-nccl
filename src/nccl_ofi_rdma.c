@@ -2085,7 +2085,8 @@ static inline int free_bounce_req(nccl_net_ofi_rdma_req_t *req,
 	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
 	/* Free buffer */
 	if (bounce_data->bounce_fl_elem) {
-		nccl_ofi_freelist_entry_free_mr(ep->bounce_buff_ctrl_fl, bounce_data->bounce_fl_elem);
+		nccl_ofi_freelist_entry_free_mr(bounce_data->rail->bounce_buff_fl,
+						bounce_data->bounce_fl_elem);
 	}
 	return free_base_req(NULL, ep->bounce_buff_reqs_fl, req, false);
 }
@@ -2103,8 +2104,10 @@ static inline nccl_net_ofi_rdma_req_t *alloc_bounce_req(nccl_net_ofi_rdma_ep_t *
 
 	rdma_req_bounce_data_t *bounce_data = get_bounce_data(req);
 
+	nccl_ofi_freelist_t *bounce_buff_fl = rail->bounce_buff_fl;
+
 	nccl_ofi_freelist_elem_t *bounce_fl_elem =
-		nccl_ofi_freelist_entry_alloc_mr(ep->bounce_buff_ctrl_fl);
+		nccl_ofi_freelist_entry_alloc_mr(bounce_buff_fl);
 	if (!bounce_fl_elem) {
 		NCCL_OFI_WARN("Failed to allocate bounce_fl_elem");
 		req->free(req, false);
@@ -5087,8 +5090,7 @@ static int post_bounce_buffer(nccl_net_ofi_rdma_req_t *req,
 	/* Reset memcheck guards of bounce buffer freelist entry to
 	 * accessible but undefined to cover cases where the buffer
 	 * gets re-posted */
- 	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
-	nccl_ofi_freelist_entry_set_undefined(ep->bounce_buff_ctrl_fl,
+	nccl_ofi_freelist_entry_set_undefined(ep_rail->bounce_buff_fl,
 					      bounce_fl_elem->ptr);
 
 	req->state = NCCL_OFI_RDMA_REQ_CREATED;
@@ -5743,6 +5745,7 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 		);
 	ep->control_rail.num_bounce_posted = 0;
 	ret = nccl_net_ofi_mutex_init(&ep->control_rail.bounce_mutex, NULL);
+	ep->control_rail.bounce_buff_fl = ep->bounce_buff_ctrl_fl;
 
 	for (int rail_id = 0; rail_id < ep->num_rails; ++rail_id) {
 		nccl_net_ofi_ep_rail_t *rail = get_rail(ep, rail_id);
@@ -5753,6 +5756,7 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 			ofi_nccl_rdma_max_posted_bounce_buffers(), ep->num_rails
 		);
 		nccl_net_ofi_mutex_init(&rail->bounce_mutex, NULL);
+		rail->bounce_buff_fl = ep->bounce_buff_data_fl;
 	}
 
 	return ret;
@@ -5772,7 +5776,13 @@ static inline int fini_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 	int ret = 0;
 	ret = nccl_ofi_freelist_fini(ep->bounce_buff_ctrl_fl);
 	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to fini bounce_buff_fl");
+		NCCL_OFI_WARN("Failed to fini bounce_buff_ctrl_fl");
+		return ret;
+	}
+
+	ret = nccl_ofi_freelist_fini(ep->bounce_buff_data_fl);
+	if (ret != 0) {
+		NCCL_OFI_WARN("Failed to fini bounce_buff_data_fl");
 		return ret;
 	}
 

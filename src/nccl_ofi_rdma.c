@@ -708,9 +708,9 @@ static inline int set_eager_copy_completed(nccl_net_ofi_rdma_req_t *req)
 	size_t size = bounce_data->recv_len;
 
 	/* Check posted count and re-post bounce buffer if needed */
-	ret = check_post_bounce_req(eager_copy_data->eager_bounce_req);
+	ret = repost_bounce_buff(bounce_data->ep, eager_copy_data->eager_bounce_req);
 	if (ret != 0) {
-		NCCL_OFI_WARN("Failed call to check_post_bounce_req");
+		NCCL_OFI_WARN("Failed call to repost_bounce_buff");
 		return ret;
 	}
 
@@ -1031,12 +1031,6 @@ static inline int handle_eager_recv(nccl_net_ofi_rdma_recv_comm_t *r_comm,
 	int ret;
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 
-	/* Decrease bounce buffer count. It will be incremented again when reposting */
-	ret = decrease_bounce_buff_cnt(ep, get_bounce_data(bounce_req)->rail);
-	if (ret != 0) {
-		return ret;
-	}
-
 	nccl_ofi_msgbuff_status_t stat;
 	nccl_ofi_msgbuff_result_t mb_res = nccl_ofi_msgbuff_insert(r_comm->msgbuff, msg_seq_num,
 		bounce_req, NCCL_OFI_MSGBUFF_BUFF, &stat);
@@ -1071,9 +1065,9 @@ static inline int handle_eager_recv(nccl_net_ofi_rdma_recv_comm_t *r_comm,
 	if (bounce_data->recv_len == 0) {
 		/* Special case: for zero-sized messages, we can skip the local read */
 		/* Re-post bounce buffer */
-		ret = check_post_bounce_req(bounce_req);
+		ret = repost_bounce_buff(ep, bounce_req);
 		if (ret != 0) {
-			NCCL_OFI_WARN("Failed call to check_post_bounce_req");
+			NCCL_OFI_WARN("Failed call to repost_bounce_buff");
 			return ret;
 		}
 		ret = inc_req_completion(recv_req, 0, recv_data->total_num_compls);
@@ -3320,9 +3314,9 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 		rdma_req_bounce_data_t *bounce_data = get_bounce_data(bounce_req);
 		if (bounce_data->recv_len == 0) {
 			/* Special case for zero-sized messages */
-			ret = check_post_bounce_req(bounce_req);
+			ret = repost_bounce_buff(ep, bounce_req);
 			if (ret != 0) {
-				NCCL_OFI_WARN("Failed call to check_post_bounce_req");
+				NCCL_OFI_WARN("Failed call to repost_bounce_buff");
 				return ret;
 			}
 			recv_data->eager_copy_req = NULL;

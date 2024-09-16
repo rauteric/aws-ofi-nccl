@@ -1154,6 +1154,17 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rai
 
 	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
 
+	/* Make sure the bounce message is coming from the right place */
+#ifndef NDEBUG
+	if (eager) {
+		/* Eager messages should be received on data rails */
+		assert(bounce_data->rail == &ep->rails[rail_id]);
+	} else {
+		/* Non-eager messages should be received on the control rail */
+		assert(bounce_data->rail == &ep->control_rail);
+	}
+#endif
+
 	/* The first 4 bits are the type, but we don't have a base
 	 * header type.  So cast to a control message and lookup the
 	 * type from there. */
@@ -5182,15 +5193,35 @@ static int send_progress(nccl_net_ofi_rdma_req_t *req)
 	return ret;
 }
 
+/**
+ * Post a ctrl message or a close message on the control rail
+ */
+static int post_ctrl_msg(nccl_net_ofi_rdma_recv_comm_t *r_comm, void *msg,
+			 size_t msg_len, nccl_net_ofi_rdma_mr_handle_t *mr_handle,
+			 nccl_net_ofi_rdma_req_t *ctx_req)
+{
+	nccl_net_ofi_rdma_recv_comm_rail_t *comm_rail = &r_comm->control_rail;
+
+	void *desc = fi_mr_desc(mr_handle->control_mr);
+
+	ssize_t rc = fi_send(comm_rail->local_ep, msg,
+			     msg_len, desc,
+			     comm_rail->remote_addr, ctx_req);
+
+	if ((rc != 0) && (rc != -FI_EAGAIN)) {
+		NCCL_OFI_WARN("Error posting RDMA ctrl request. RC: %zd, Error: %s",
+				rc, fi_strerror(-rc));
+	}
+
+	return rc;
+}
+
 static int post_rdma_ctrl(nccl_net_ofi_rdma_req_t *req)
 {
 	assert(req->type == NCCL_OFI_RDMA_SEND_CTRL);
 	nccl_net_ofi_rdma_recv_comm_t *r_comm = (nccl_net_ofi_rdma_recv_comm_t *)req->comm;
 	rdma_req_send_ctrl_data_t *send_ctrl_data = get_send_ctrl_data(req);
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
-
-	// Get communicator rail information to xfer the req
-	nccl_net_ofi_rdma_recv_comm_rail_t *comm_rail = &r_comm->control_rail;
 
 	nccl_ofi_freelist_elem_t *ctrl_fl_elem = send_ctrl_data->ctrl_fl_elem;
 
@@ -5199,25 +5230,13 @@ static int post_rdma_ctrl(nccl_net_ofi_rdma_req_t *req)
 		(freelist_regmr_fn_handle_t *)ctrl_fl_elem->reginfo.mr_handle;
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = fl_handle->mr_handle;
 
-	void *desc = fi_mr_desc(mr_handle->control_mr);
-
 	NCCL_OFI_TRACE_SEND_CTRL_START(req->dev_id, ep->control_rail.rail_id, req->comm, req, req->msg_seq_num);
 
 	size_t ctrl_msg_len = nccl_net_ofi_rdma_ctrl_msg_size(ep->num_rails, ep->use_long_rkeys);
 
 	nccl_net_ofi_rdma_ctrl_msg_t *ctrl_msg = send_ctrl_get_msg(send_ctrl_data);
 
-	ssize_t rc = fi_send(comm_rail->local_ep, ctrl_msg,
-			     ctrl_msg_len,
-			     desc,
-			     comm_rail->remote_addr, req);
-
-	if ((rc != 0) && (rc != -FI_EAGAIN)) {
-		NCCL_OFI_WARN("Error posting RDMA ctrl request. RC: %zd, Error: %s",
-			      rc, fi_strerror(-rc));
-	}
-
-	return rc;
+	return post_ctrl_msg(r_comm, ctrl_msg, ctrl_msg_len, mr_handle, req);
 }
 
 static int post_close_msg(nccl_net_ofi_rdma_req_t *req)
@@ -5225,16 +5244,6 @@ static int post_close_msg(nccl_net_ofi_rdma_req_t *req)
 	assert(req->type == NCCL_OFI_RDMA_SEND_CLOSE);
 	nccl_net_ofi_rdma_recv_comm_t *r_comm = (nccl_net_ofi_rdma_recv_comm_t *)req->comm;
 	rdma_req_send_close_data_t *send_close_data = req_get_send_close_data(req);
-	nccl_net_ofi_schedule_t *schedule = send_close_data->ctrl_schedule;
-
-	assert(schedule != NULL);
-
-	// Should be using a single rail for posting the control message
-	nccl_net_ofi_xfer_info_t *xfer_info = &schedule->rail_xfer_infos[0];
-
-	// Get communicator rail information to xfer the req
-	nccl_net_ofi_rdma_recv_comm_rail_t *comm_rail;
-	comm_rail = get_recv_comm_rail(r_comm, xfer_info->rail_id);
 
 	nccl_ofi_freelist_elem_t *ctrl_fl_elem = send_close_data->ctrl_fl_elem;
 
@@ -5243,23 +5252,11 @@ static int post_close_msg(nccl_net_ofi_rdma_req_t *req)
 		(freelist_regmr_fn_handle_t *)ctrl_fl_elem->reginfo.mr_handle;
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = fl_handle->mr_handle;
 
-	assert(xfer_info->rail_id < mr_handle->num_rails);
-	void *desc = fi_mr_desc(mr_handle->mr[xfer_info->rail_id]);
 	req->state = NCCL_OFI_RDMA_REQ_PENDING;
 
 	nccl_net_ofi_rdma_close_msg_t *close_msg = send_close_get_msg(send_close_data);
 
-	ssize_t rc = fi_send(comm_rail->local_ep, close_msg,
-			     sizeof(nccl_net_ofi_rdma_close_msg_t),
-			     desc,
-			     comm_rail->remote_addr, req);
-
-	if ((rc != 0) && (rc != -FI_EAGAIN)) {
-		NCCL_OFI_WARN("Error posting RDMA close request. RC: %zd, Error: %s",
-			      rc, fi_strerror(-rc));
-	}
-
-	return rc;
+	return post_ctrl_msg(r_comm, close_msg, sizeof(*close_msg), mr_handle, req);
 }
 
 static int post_eager_copy(nccl_net_ofi_rdma_req_t *req)

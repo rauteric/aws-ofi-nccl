@@ -2930,11 +2930,11 @@ static int freelist_regmr_gpu_fn(void *ep_void_ptr, void *data, size_t size, voi
 }
 
 /**
- * Deregister host memory registered with freelist_regmr_host_fn
+ * Deregister host memory registered with freelist_regmr_{host,gpu}_fn
  *
  * This interface is suitable for use with a freelist.
  */
-static int freelist_deregmr_host_fn(void *handle)
+static int freelist_deregmr_fn(void *handle)
 {
 	freelist_regmr_fn_handle_t *freelist_handle = (freelist_regmr_fn_handle_t *)handle;
 	assert(freelist_handle);
@@ -4370,7 +4370,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_listen
 		NCCL_OFI_MAX(sizeof(nccl_net_ofi_rdma_ctrl_msg_t),
 			     sizeof(nccl_net_ofi_rdma_close_msg_t)),
 		8, 8, NCCL_OFI_MAX_REQUESTS, freelist_regmr_host_fn,
-		freelist_deregmr_host_fn, ep, false, 1,
+		freelist_deregmr_fn, ep, false, 1,
 		&r_comm->ctrl_buff_fl);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Call to freelist_init_mr failed: %d", ret);
@@ -5716,20 +5716,34 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 	}
 
 	ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
-					ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
-					freelist_regmr_host_fn, freelist_deregmr_host_fn,
+					ofi_nccl_rdma_max_posted_bounce_buffers(), 16, ofi_nccl_rdma_max_posted_bounce_buffers(),
+					freelist_regmr_host_fn, freelist_deregmr_fn,
 					ep, false, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_ctrl_fl);
 	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to init bounce_buff_fl");
+		NCCL_OFI_WARN("Failed to init bounce_buff_ctrl_fl");
 		if (nccl_ofi_freelist_fini(ep->bounce_buff_reqs_fl))
 			NCCL_OFI_WARN("Also failed to freelist_fini bounce_buff_reqs_fl");
 		return ret;
 	}
 
-	ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
-					ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
-					freelist_regmr_host_fn, freelist_deregmr_host_fn,
-					ep, false, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_data_fl);
+	{
+		bool alloc_gpu = false;
+		nccl_ofi_freelist_regmr_fn regfn = freelist_regmr_host_fn;
+
+		if (ofi_nccl_alloc_bounce_buff_gpu())
+		{
+			alloc_gpu = true;
+			regfn = freelist_regmr_gpu_fn;
+		}
+		ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
+						ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
+						regfn, freelist_deregmr_fn,
+						ep, alloc_gpu, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_data_fl);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to init bounce_buff_data_fl");
+			return ret;
+		}
+	}
 
 	/*
 	 * The *_bounce_posted limits are used in the progress engine to

@@ -240,6 +240,11 @@ OFI_NCCL_PARAM_INT(errorcheck_mutex, "ERRORCHECK_MUTEX",
  */
 OFI_NCCL_PARAM_INT(endpoint_per_communicator, "ENDPOINT_PER_COMM", 0);
 
+/**
+ * Allocate bounce buffers in GPU memory instead of CPU memory
+ */
+OFI_NCCL_PARAM_INT(alloc_bounce_buff_gpu, "ALLOC_BOUNCE_BUFF_GPU", 0);
+
 #ifdef __cplusplus
 } // End extern "C"
 #endif

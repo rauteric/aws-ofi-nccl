@@ -5713,7 +5713,7 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 	}
 
 	ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
-					ofi_nccl_rdma_max_posted_bounce_buffers(), 16, ofi_nccl_rdma_max_posted_bounce_buffers(),
+					ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
 					freelist_regmr_host_fn, freelist_deregmr_fn,
 					ep, false, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_ctrl_fl);
 	if (ret != 0) {
@@ -5732,8 +5732,10 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
 			alloc_gpu = true;
 			regfn = freelist_regmr_gpu_fn;
 		}
+		/* This FL cannot be increased during the run, so max size has
+		   to be equal to min size */
 		ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
-						ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
+						ofi_nccl_rdma_max_posted_bounce_buffers(), 0, ofi_nccl_rdma_max_posted_bounce_buffers(),
 						regfn, freelist_deregmr_fn,
 						ep, alloc_gpu, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_data_fl);
 		if (ret != 0) {

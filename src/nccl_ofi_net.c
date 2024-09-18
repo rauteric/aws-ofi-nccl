@@ -141,6 +141,18 @@ int nccl_net_ofi_alloc_gpu_mr_buffer(size_t size, void **ptr)
 		*ptr = NULL;
 		return -ENOMEM;
 	}
+	r = nccl_net_ofi_cuMemsetD8(dptr, 0, size);
+	if (r != CUDA_SUCCESS) {
+		NCCL_OFI_WARN("Unable to memset CUDA memory");
+		*ptr = NULL;
+		return -EIO;
+	}
+	r = nccl_net_ofi_cuCtxSynchronize();
+	if (r != CUDA_SUCCESS) {
+		NCCL_OFI_WARN("Unable to CtxSynchronize");
+		*ptr = NULL;
+		return -EIO;
+	}
 	*ptr = (void *)dptr;
 	/* TODO why is this true? */
 	assert(NCCL_OFI_IS_PTR_ALIGNED(*ptr, system_page_size));

@@ -36,6 +36,8 @@ extern CUresult (*nccl_net_ofi_cuCtxGetDevice)(CUdevice *device);
 extern CUresult (*nccl_net_ofi_cuDeviceGetCount)(int* count);
 extern CUresult (*nccl_net_ofi_cuMemAlloc)(CUdeviceptr *dptr, size_t bytesize);
 extern CUresult (*nccl_net_ofi_cuMemFree)(CUdeviceptr dptr);
+extern CUresult (*nccl_net_ofi_cuMemsetD8)(CUdeviceptr dstDevice, unsigned char uc, size_t N);
+extern CUresult (*nccl_net_ofi_cuCtxSynchronize)(void);
 
 #if CUDA_VERSION >= 11030
 extern CUresult (*nccl_net_ofi_cuFlushGPUDirectRDMAWrites)(CUflushGPUDirectRDMAWritesTarget target,

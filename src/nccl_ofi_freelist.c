@@ -267,7 +267,7 @@ int nccl_ofi_freelist_add(nccl_ofi_freelist_t *freelist,
 		block->mr_handle = NULL;
 	}
 
-	block->entries = (struct nccl_ofi_freelist_elem_t *)
+	block->entries = (nccl_ofi_freelist_elem_t *)
 		calloc(allocation_count, sizeof(*(block->entries)));
 	if (block->entries == NULL) {
 		NCCL_OFI_WARN("Failed to allocate entries");
@@ -277,7 +277,7 @@ int nccl_ofi_freelist_add(nccl_ofi_freelist_t *freelist,
 	freelist->blocks = block;
 
 	for (size_t i = 0 ; i < allocation_count ; ++i) {
-		struct nccl_ofi_freelist_elem_t *entry = &block->entries[i];
+		nccl_ofi_freelist_elem_t *entry = &block->entries[i];
 
 		size_t user_entry_size = freelist->entry_size - freelist->memcheck_redzone_size;
 

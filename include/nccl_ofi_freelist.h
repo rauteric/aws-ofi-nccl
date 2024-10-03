@@ -56,7 +56,7 @@ struct nccl_ofi_freelist_block_t {
 	void *memory;
 	size_t memory_size;
 	void *mr_handle;
-	struct nccl_ofi_freelist_elem_t *entries;
+	nccl_ofi_freelist_elem_t *entries;
 };
 
 /*
@@ -106,7 +106,7 @@ struct nccl_ofi_freelist_t {
 	size_t max_entry_count;
 	size_t increase_entry_count;
 
-	struct nccl_ofi_freelist_elem_t *entries;
+	nccl_ofi_freelist_elem_t *entries;
 	struct nccl_ofi_freelist_block_t *blocks;
 
 	bool have_reginfo;

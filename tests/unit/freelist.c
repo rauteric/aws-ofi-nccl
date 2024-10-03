@@ -40,7 +40,6 @@ int deregmr_simple(void *handle)
 
 struct random_freelisted_item {
 	int random;
-	nccl_ofi_freelist_reginfo_t reginfo;
 	char buf[419];
 };
 
@@ -183,7 +182,6 @@ int main(int argc, char *argv[])
 					regmr_simple,
 					deregmr_simple,
 					(void *)0xdeadbeaf,
-					offsetof(struct random_freelisted_item, reginfo),
 					1,
 					&freelist);
 	if (ret != ncclSuccess) {
@@ -195,8 +193,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	for (i = 0 ; i < 8 ; i++) {
-		struct random_freelisted_item *item =
-			(struct random_freelisted_item *)nccl_ofi_freelist_entry_alloc(freelist);
+		nccl_ofi_freelist_elem_t *item = nccl_ofi_freelist_entry_alloc_mr(freelist);
 		if (!item) {
 			NCCL_OFI_WARN("allocation unexpectedly failed");
 			exit(1);
@@ -207,13 +204,11 @@ int main(int argc, char *argv[])
 			exit(1);
 		}
 
-		if ((uintptr_t)item - (long unsigned int)simple_base != item->reginfo.base_offset) {
-			NCCL_OFI_WARN("base_offset was wrong %p %p %lu %lu",
-				      item, simple_base, (char *)item - (char *)simple_base,
-				      item->reginfo.base_offset);
+		if (item->ptr != simple_base) {
+			NCCL_OFI_WARN("Pointer does not match mr arg");
 			exit(1);
 		}
-	}
+	}ß
 	nccl_ofi_freelist_fini(freelist);
 	if (simple_base) {
 		NCCL_OFI_WARN("looks like deregistration not called");

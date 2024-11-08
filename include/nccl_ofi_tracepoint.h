@@ -39,12 +39,12 @@
 } while(0)
 
 #define NCCL_OFI_TRACE_EAGER_SEND_START(dev, rail_id, size, comm, msg_seq_num, request) do { \
-	/* TODO: use a better (LTTNG) trace for eager send? */ \
-	lttng_ust_tracepoint(nccl_ofi_plugin, Send_write_segment_start, dev, rail_id, size, comm, msg_seq_num, request); \
+	lttng_ust_tracepoint(nccl_ofi_plugin, Eager_send_start, dev, rail_id, size, comm, msg_seq_num, request); \
 	NCCL_OFI_TRACE_EAGER_SEND_START_NVTX(dev, rail_id, size, comm, msg_seq_num, request); \
 } while(0)
 
 #define NCCL_OFI_TRACE_EAGER_SEND_COMPLETE(dev, rail_id, comm, msg_seq_num, request) do { \
+	lttng_ust_tracepoint(nccl_ofi_plugin, Eager_send_complete, dev, rail_id, comm, msg_seq_num, request); \
 	NCCL_OFI_TRACE_EAGER_SEND_COMPLETE_NVTX(dev, rail_id, comm, msg_seq_num, request); \
 } while (0)
 

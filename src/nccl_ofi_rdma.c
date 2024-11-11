@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "nccl_ofi.h"
 #if HAVE_CUDA
@@ -1907,6 +1908,21 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 	ssize_t rc = 0;
 	int ret = 0;
 
+	struct timespec ts;
+	ret = clock_gettime(CLOCK_MONOTONIC, &ts);
+	if (ret != 0) abort();
+
+	if (rail->last_poll_initialized) {
+		int64_t elapsed_time = 1000000000LL * (ts.tv_sec - rail->last_poll.tv_sec)
+			+ (ts.tv_nsec - rail->last_poll.tv_nsec);
+		if (elapsed_time > rail->max_poll_duration) {
+			rail->max_poll_duration = elapsed_time;
+		}
+	}
+
+	rail->last_poll = ts;
+	rail->last_poll_initialized = true;
+
 	while (true) {
 		/* Receive completions for the given endpoint */
 		rc = fi_cq_read(rail->cq, cqe_buffers, cq_read_count);
@@ -1914,6 +1930,11 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 			ret = process_completions(cqe_buffers, rc, rdma_endpoint_get_device(ep), rail->rail_id);
 			if (OFI_UNLIKELY(ret != 0))
 				goto exit;
+
+			/* Trace */
+			NCCL_OFI_TRACE_POLL_DURATION(rail->rail_id, rail->max_poll_duration);
+			rail->max_poll_duration = 0;
+
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
 			ret = process_err_completion(rdma_endpoint_get_device(ep), rail->cq);
 			if (ret == 0) {

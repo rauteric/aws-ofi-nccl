@@ -121,4 +121,8 @@
 	NCCL_OFI_TRACE_PENDING_REMOVE_NVTX(request); \
 } while(0)
 
+#define NCCL_OFI_TRACE_POLL_DURATION(rail_id, max_poll_duration) do { \
+	lttng_ust_tracepoint(nccl_ofi_plugin, Poll_cq_duration, rail_id, max_poll_duration); \
+} while(0)
+
 #endif /* NCCL_OFI_TRACEPOINT_H_ */

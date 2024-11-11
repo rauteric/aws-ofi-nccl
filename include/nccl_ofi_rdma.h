@@ -21,6 +21,7 @@ extern "C" {
 #include "nccl_ofi_idpool.h"
 #include "nccl_ofi_tracepoint.h"
 #include "nccl_ofi_ep_addr_list.h"
+#include <time.h>
 
 /* Maximum number of rails supported. This defines the size of
  * messages exchanged during connection establishment (linear
@@ -681,6 +682,10 @@ struct nccl_net_ofi_ep_rail {
 
 	/* Completion Queue handle */
 	struct fid_cq *cq;
+
+	struct timespec last_poll;
+	bool last_poll_initialized;
+	int64_t max_poll_duration;
 
 	/* Access domain handles */
 	struct fid_domain *domain;

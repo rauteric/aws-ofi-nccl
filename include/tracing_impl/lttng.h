@@ -361,6 +361,19 @@ LTTNG_UST_TRACEPOINT_EVENT(
     )
 )
 
+LTTNG_UST_TRACEPOINT_EVENT(
+    nccl_ofi_plugin,
+    Poll_cq_duration,
+    LTTNG_UST_TP_ARGS(
+            int, rail_id,
+            int64_t, max_duation_ns
+    ),
+    LTTNG_UST_TP_FIELDS(
+            lttng_ust_field_integer(int, rail_id, rail_id)
+            lttng_ust_field_integer(int64_t, max_duation_ns, max_duation_ns)
+    )
+)
+
 #endif /* !defined(LTTNG_H) || defined(LTTNG_UST_TRACEPOINT_HEADER_MULTI_READ) */
 
 #include <lttng/tracepoint-event.h>

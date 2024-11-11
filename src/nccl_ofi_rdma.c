@@ -812,8 +812,6 @@ static inline int set_send_ctrl_completed(nccl_net_ofi_rdma_req_t *req)
 	req->ncompls = 1;
 	req->state = NCCL_OFI_RDMA_REQ_COMPLETED;
 
-	NCCL_OFI_TRACE_RECV_CTRL_SEND_COMPLETE(recv_req);
-
 	nccl_net_ofi_mutex_unlock(&req->req_lock);
 
 	nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
@@ -5514,7 +5512,6 @@ static int post_rdma_ctrl(nccl_net_ofi_rdma_req_t *req)
 	comm_rail = rdma_recv_comm_get_control_rail(r_comm, rail_id);
 	assert(rail_id < mr_handle->num_control_rails);
 	desc = fi_mr_desc(mr_handle->control_mr[rail_id]);
-	NCCL_OFI_TRACE_SEND_CTRL_START(req->dev_id, rail_id, req->comm, req, req->msg_seq_num);
 
 	size_t ctrl_msg_len = nccl_net_ofi_rdma_ctrl_msg_size(ep->num_rails, ep->use_long_rkeys);
 
@@ -5526,6 +5523,8 @@ static int post_rdma_ctrl(nccl_net_ofi_rdma_req_t *req)
 	if ((rc != 0) && (rc != -FI_EAGAIN)) {
 		NCCL_OFI_WARN("Error posting RDMA ctrl request. RC: %zd, Error: %s",
 			      rc, fi_strerror(-rc));
+	} else if (rc != -FI_EAGAIN) {
+		NCCL_OFI_TRACE_SEND_CTRL_START(req->dev_id, rail_id, req->comm, req, req->msg_seq_num);
 	}
 
 	return rc;

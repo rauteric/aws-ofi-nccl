@@ -365,10 +365,14 @@ LTTNG_UST_TRACEPOINT_EVENT(
     nccl_ofi_plugin,
     Poll_cq_duration,
     LTTNG_UST_TP_ARGS(
+	    int, dev,
+	    void *, rail,
             int, rail_id,
             int64_t, max_duation_ns
     ),
     LTTNG_UST_TP_FIELDS(
+            lttng_ust_field_integer(int, dev, dev)
+	    lttng_ust_field_integer_hex(uint64_t, rail, (uint64_t)rail)
             lttng_ust_field_integer(int, rail_id, rail_id)
             lttng_ust_field_integer(int64_t, max_duation_ns, max_duation_ns)
     )

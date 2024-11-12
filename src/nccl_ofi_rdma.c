@@ -1911,17 +1911,17 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 	struct timespec ts;
 	ret = clock_gettime(CLOCK_MONOTONIC, &ts);
 	if (ret != 0) abort();
-
-	if (rail->last_poll_initialized) {
-		int64_t elapsed_time = 1000000000LL * (ts.tv_sec - rail->last_poll.tv_sec)
-			+ (ts.tv_nsec - rail->last_poll.tv_nsec);
-		if (elapsed_time > rail->max_poll_duration) {
-			rail->max_poll_duration = elapsed_time;
+	nccl_net_ofi_ep_rail_t *poll_rail = rdma_endpoint_get_rail(ep, rail->rail_id);
+	if (poll_rail->last_poll_initialized) {
+		int64_t elapsed_time = 1000000000LL * (ts.tv_sec - poll_rail->last_poll.tv_sec)
+			+ (ts.tv_nsec - poll_rail->last_poll.tv_nsec);
+		if (elapsed_time > poll_rail->max_poll_duration) {
+			poll_rail->max_poll_duration = elapsed_time;
 		}
 	}
 
-	rail->last_poll = ts;
-	rail->last_poll_initialized = true;
+	poll_rail->last_poll = ts;
+	poll_rail->last_poll_initialized = true;
 
 	while (true) {
 		/* Receive completions for the given endpoint */
@@ -1932,8 +1932,8 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 				goto exit;
 
 			/* Trace */
-			NCCL_OFI_TRACE_POLL_DURATION(rail->rail_id, rail->max_poll_duration);
-			rail->max_poll_duration = 0;
+			NCCL_OFI_TRACE_POLL_DURATION(rdma_endpoint_get_device(ep)->base.dev_id, poll_rail, poll_rail->rail_id, poll_rail->max_poll_duration);
+			poll_rail->max_poll_duration = 0;
 
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
 			ret = process_err_completion(rdma_endpoint_get_device(ep), rail->cq);

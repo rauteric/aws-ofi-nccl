@@ -1932,7 +1932,7 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 				goto exit;
 
 			/* Trace */
-			NCCL_OFI_TRACE_POLL_DURATION(rdma_endpoint_get_device(ep)->base.dev_id, poll_rail, poll_rail->rail_id, poll_rail->max_poll_duration);
+			NCCL_OFI_TRACE_POLL_DURATION(rdma_endpoint_get_device(ep)->base.dev_id, poll_rail, poll_rail->rail_id, poll_rail->max_poll_duration, ep->num_inflight_sends, ep->num_inflight_recvs);
 			poll_rail->max_poll_duration = 0;
 
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
@@ -2606,8 +2606,10 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 			nccl_ofi_msgbuff_t *msgbuff;
 			if (req->type == NCCL_OFI_RDMA_SEND) {
 				msgbuff = ((nccl_net_ofi_rdma_send_comm_t *)base_comm)->msgbuff;
+				ep->num_inflight_sends--;
 			} else if (req->type ==  NCCL_OFI_RDMA_RECV) {
 				msgbuff = ((nccl_net_ofi_rdma_recv_comm_t *)base_comm)->msgbuff;
+				ep->num_inflight_recvs--;
 			} else {
 				NCCL_OFI_WARN("Unexpected request type: %d", req->type);
 				ret = -EINVAL;
@@ -3579,6 +3581,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	/* At this point, we've successfully inserted a new request, so update the num inflight. */
 	(r_comm->num_inflight_reqs)++;
+	ep->num_inflight_recvs++;
 
 	NCCL_OFI_TRACE_RECV(dev_id, r_comm->local_comm_id, sizes[0], req, base_req);
 
@@ -5889,6 +5892,7 @@ retry:
 	 * so update the num inflight
 	 */
 	(s_comm->num_inflight_reqs)++;
+	ep->num_inflight_sends++;
 
 	NCCL_OFI_TRACE_SEND(req->dev_id, size, s_comm, msg_seq_num, req, base_req);
 

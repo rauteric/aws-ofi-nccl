@@ -368,13 +368,17 @@ LTTNG_UST_TRACEPOINT_EVENT(
 	    int, dev,
 	    void *, rail,
             int, rail_id,
-            int64_t, max_duation_ns
+            int64_t, max_duation_ns,
+            int, num_inflight_sends,
+            int, num_inflight_recvs
     ),
     LTTNG_UST_TP_FIELDS(
             lttng_ust_field_integer(int, dev, dev)
 	    lttng_ust_field_integer_hex(uint64_t, rail, (uint64_t)rail)
             lttng_ust_field_integer(int, rail_id, rail_id)
             lttng_ust_field_integer(int64_t, max_duation_ns, max_duation_ns)
+            lttng_ust_field_integer(int, num_inflight_sends, num_inflight_sends)
+            lttng_ust_field_integer(int, num_inflight_recvs, num_inflight_recvs)
     )
 )
 

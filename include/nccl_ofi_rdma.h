@@ -683,9 +683,10 @@ struct nccl_net_ofi_ep_rail {
 	/* Completion Queue handle */
 	struct fid_cq *cq;
 
-	struct timespec last_poll;
+	struct timespec last_poll, end_poll;
 	bool last_poll_initialized;
 	int64_t max_poll_duration;
+	int64_t max_poll_time;
 
 	/* Access domain handles */
 	struct fid_domain *domain;

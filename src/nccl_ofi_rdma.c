@@ -1902,6 +1902,11 @@ static int process_pending_reqs(nccl_net_ofi_rdma_ep_t *ep)
 	return rc;
 }
 
+static int64_t timespec_duration_ns(struct timespec t0, struct timespec t1)
+{
+	return 1000000000LL * (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec);
+}
+
 static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_t *rail)
 {
 	struct fi_cq_data_entry cqe_buffers[cq_read_count];
@@ -1913,10 +1918,13 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 	if (ret != 0) abort();
 	nccl_net_ofi_ep_rail_t *poll_rail = rdma_endpoint_get_rail(ep, rail->rail_id);
 	if (poll_rail->last_poll_initialized) {
-		int64_t elapsed_time = 1000000000LL * (ts.tv_sec - poll_rail->last_poll.tv_sec)
-			+ (ts.tv_nsec - poll_rail->last_poll.tv_nsec);
+		int64_t elapsed_time = timespec_duration_ns(poll_rail->last_poll, ts);
+
 		if (elapsed_time > poll_rail->max_poll_duration) {
 			poll_rail->max_poll_duration = elapsed_time;
+
+			/* Grab most recent cq processing time */
+			poll_rail->max_poll_time = timespec_duration_ns(poll_rail->last_poll, poll_rail->end_poll);
 		}
 	}
 
@@ -1932,8 +1940,9 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 				goto exit;
 
 			/* Trace */
-			NCCL_OFI_TRACE_POLL_DURATION(rdma_endpoint_get_device(ep)->base.dev_id, poll_rail, poll_rail->rail_id, poll_rail->max_poll_duration, ep->num_inflight_sends, ep->num_inflight_recvs);
+			NCCL_OFI_TRACE_POLL_DURATION(rdma_endpoint_get_device(ep)->base.dev_id, poll_rail, poll_rail->rail_id, poll_rail->max_poll_duration, poll_rail->max_poll_time, ep->num_inflight_sends, ep->num_inflight_recvs);
 			poll_rail->max_poll_duration = 0;
+			poll_rail->max_poll_time = 0;
 
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
 			ret = process_err_completion(rdma_endpoint_get_device(ep), rail->cq);
@@ -1958,6 +1967,9 @@ static int ofi_process_cq_rail(nccl_net_ofi_rdma_ep_t *ep, nccl_net_ofi_ep_rail_
 			goto exit;
 		}
 	}
+
+	ret = clock_gettime(CLOCK_MONOTONIC, &poll_rail->end_poll);
+	if (ret != 0) abort();
 
 exit:
 	return ret;

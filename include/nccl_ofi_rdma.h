@@ -834,6 +834,11 @@ typedef struct nccl_net_ofi_rdma_device {
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[MAX_NUM_RAILS];
 #endif
+
+	bool test_end_initialized;
+	struct timespec test_start;
+	struct timespec test_end;
+
 } nccl_net_ofi_rdma_device_t;
 
 

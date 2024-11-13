@@ -125,4 +125,7 @@
 	lttng_ust_tracepoint(nccl_ofi_plugin, Poll_cq_duration, dev, rail, rail_id, max_poll_duration, max_poll_time, num_inflight_sends, num_inflight_recvs); \
 } while(0)
 
+#define NCCL_OFI_TRACE_TEST_DURATION(dev, duration_ns, interval_ns, num_inflight_sends, num_inflight_recvs) do { \
+	lttng_ust_tracepoint(nccl_ofi_plugin, Test_duration, dev, duration_ns, interval_ns, num_inflight_sends, num_inflight_recvs); \
+} while(0)
 #endif /* NCCL_OFI_TRACEPOINT_H_ */

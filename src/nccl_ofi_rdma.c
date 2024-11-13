@@ -2581,6 +2581,9 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	       req->type == NCCL_OFI_RDMA_RECV ||
 	       req->type == NCCL_OFI_RDMA_FLUSH);
 
+	int64_t test_duration, test_interval;
+	struct timespec ts;
+
 	/* Retrieve and validate comm */
 	nccl_net_ofi_comm_t *base_comm = req->comm;
 	assert(base_comm != NULL);
@@ -2588,6 +2591,11 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	/* Retrieve and validate endpoint */
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)base_comm->ep;
 	assert(ep != NULL);
+
+	/* Retrieve device */
+	nccl_net_ofi_rdma_device_t *device = rdma_endpoint_get_device(ep);
+	ret = clock_gettime(CLOCK_MONOTONIC, &device->test_start);
+	if (ret != 0) abort();
 
 	/* Process more completions unless the current request is
 	 * completed */
@@ -2649,6 +2657,19 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 		ret = -EINVAL;
 		goto exit;
 	}
+
+	ret = clock_gettime(CLOCK_MONOTONIC, &ts);
+	if (ret != 0) abort();
+
+	test_duration = timespec_duration_ns(device->test_start, ts);
+	if (device->test_end_initialized) {
+		test_interval = timespec_duration_ns(device->test_end, device->test_start);
+	} else {
+		test_interval = 0;
+	}
+	NCCL_OFI_TRACE_TEST_DURATION(req->dev_id, test_duration, test_interval, ep->num_inflight_sends, ep->num_inflight_recvs);
+	device->test_end = ts;
+	device->test_end_initialized = true;
 
  exit:
 	return ret;
@@ -7499,6 +7520,10 @@ static nccl_net_ofi_rdma_device_t *nccl_net_ofi_rdma_device_create(
 		device->nvtx_domain[i] = nvtxDomainCreateA(name);
 	}
 #endif
+
+	memset(&device->test_start, 0, sizeof(device->test_start));
+	memset(&device->test_end, 0, sizeof(device->test_end));
+	device->test_end_initialized = false;
 
 	return device;
 

@@ -384,6 +384,25 @@ LTTNG_UST_TRACEPOINT_EVENT(
     )
 )
 
+LTTNG_UST_TRACEPOINT_EVENT(
+    nccl_ofi_plugin,
+    Test_duration,
+    LTTNG_UST_TP_ARGS(
+	    int, dev,
+            int64_t, duration_ns,
+            int64_t, interval_ns,
+            int, num_inflight_sends,
+            int, num_inflight_recvs
+    ),
+    LTTNG_UST_TP_FIELDS(
+            lttng_ust_field_integer(int, dev, dev)
+            lttng_ust_field_integer(int64_t, duration_ns, duration_ns)
+            lttng_ust_field_integer(int64_t, interval_ns, interval_ns)
+            lttng_ust_field_integer(int, num_inflight_sends, num_inflight_sends)
+            lttng_ust_field_integer(int, num_inflight_recvs, num_inflight_recvs)
+    )
+)
+
 #endif /* !defined(LTTNG_H) || defined(LTTNG_UST_TRACEPOINT_HEADER_MULTI_READ) */
 
 #include <lttng/tracepoint-event.h>

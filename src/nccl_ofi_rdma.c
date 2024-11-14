@@ -2582,6 +2582,7 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	       req->type == NCCL_OFI_RDMA_FLUSH);
 
 	int64_t test_duration, test_interval;
+	(void)test_duration; (void)test_interval;
 	struct timespec ts;
 
 	/* Retrieve and validate comm */

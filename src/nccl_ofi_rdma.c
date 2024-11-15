@@ -2542,6 +2542,7 @@ static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm)
 static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 {
 	int ret = 0;
+	nvtxRangeId_t nri = nvtx_start("Test", 0x0000FF);
 	nccl_net_ofi_rdma_req_t *req = (nccl_net_ofi_rdma_req_t *)base_req;
 	*done = 0;
 	assert(req->type == NCCL_OFI_RDMA_WRITE ||
@@ -2618,6 +2619,7 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	}
 
  exit:
+	nvtx_end(nri);
 	return ret;
 }
 
@@ -3444,6 +3446,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 			 nccl_net_ofi_req_t **base_req)
 {
 	int ret = 0;
+	nvtxRangeId_t nri = nvtx_start("Recv", 0x00FF00);
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	nccl_net_ofi_rdma_recv_comm_t *r_comm = (nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
 	rdma_req_recv_data_t *recv_data = NULL;
@@ -3604,6 +3607,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 		req->free(req, false);
 	*base_req = NULL;
  exit:
+	nvtx_end(nri);
 	return ret;
 }
 
@@ -5721,6 +5725,7 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 			 nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req_t **base_req)
 {
 	int ret = 0;
+	nvtxRangeId_t nri = nvtx_start("Send", 0xFF0000);
 	nccl_net_ofi_rdma_send_comm_t *s_comm = (nccl_net_ofi_rdma_send_comm_t *)send_comm;
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = (nccl_net_ofi_rdma_mr_handle_t *)mhandle;
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
@@ -5904,6 +5909,7 @@ retry:
 		req->free(req, false);
 	*base_req = NULL;
  exit:
+	nvtx_end(nri);
 	return ret;
 }
 

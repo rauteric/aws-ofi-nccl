@@ -123,4 +123,8 @@
 	NCCL_OFI_TRACE_PENDING_REMOVE_NVTX(request); \
 } while(0)
 
+#define NCCL_OFI_TRACE_PLUGIN_CALL_DELAY(dev, num_inflight_sends, num_inflight_recvs, call_delay, func) do { \
+	lttng_ust_tracepoint(nccl_ofi_plugin, Plugin_call_delay, dev, num_inflight_sends, num_inflight_recvs, call_delay, func); \
+} while (0)
+
 #endif /* NCCL_OFI_TRACEPOINT_H_ */

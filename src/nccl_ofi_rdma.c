@@ -2569,6 +2569,9 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)base_comm->ep;
 	assert(ep != NULL);
 
+	nccl_net_ofi_rdma_device_t *device = rdma_endpoint_get_device(ep);
+	start_handler(device, "Test");
+
 	/* Process more completions unless the current request is
 	 * completed */
 	if (req->state != NCCL_OFI_RDMA_REQ_COMPLETED
@@ -2598,8 +2601,10 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 			nccl_ofi_msgbuff_t *msgbuff;
 			if (req->type == NCCL_OFI_RDMA_SEND) {
 				msgbuff = ((nccl_net_ofi_rdma_send_comm_t *)base_comm)->msgbuff;
+				device->num_inflight_sends--;
 			} else if (req->type ==  NCCL_OFI_RDMA_RECV) {
 				msgbuff = ((nccl_net_ofi_rdma_recv_comm_t *)base_comm)->msgbuff;
+				device->num_inflight_recvs--;
 			} else {
 				NCCL_OFI_WARN("Unexpected request type: %d", req->type);
 				ret = -EINVAL;
@@ -2629,6 +2634,7 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	}
 
  exit:
+	end_handler(device);
 	return ret;
 }
 
@@ -3458,8 +3464,9 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	nccl_net_ofi_rdma_recv_comm_t *r_comm = (nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
 	rdma_req_recv_data_t *recv_data = NULL;
-	nccl_net_ofi_rdma_ep_t *ep = NULL;
-	nccl_net_ofi_rdma_device_t *device = NULL;
+	nccl_net_ofi_rdma_ep_t *ep = rdma_recv_comm_get_ep(r_comm);
+	nccl_net_ofi_rdma_device_t *device = rdma_endpoint_get_device(ep);
+	start_handler(device, "Recv");
 	int dev_id = 0;
 	nccl_net_ofi_rdma_mr_handle_t **mr_handles = (nccl_net_ofi_rdma_mr_handle_t **)mhandles;
 	uint16_t msg_seq_num = 0;
@@ -3482,10 +3489,8 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	dev_id = r_comm->base.base.dev_id;
 
-	ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 	assert(ep != NULL);
 
-	device = rdma_endpoint_get_device(ep);
 	assert(device != NULL);
 
 	ret = process_cq_if_pending(ep);
@@ -3571,6 +3576,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	/* At this point, we've successfully inserted a new request, so update the num inflight. */
 	(r_comm->num_inflight_reqs)++;
+	device->num_inflight_recvs++;
 
 	NCCL_OFI_TRACE_RECV(dev_id, r_comm->local_comm_id, sizes[0], req, base_req);
 
@@ -3615,6 +3621,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 		req->free(req, false);
 	*base_req = NULL;
  exit:
+	end_handler(device);
 	return ret;
 }
 
@@ -5750,7 +5757,9 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 	int ret = 0;
 	nccl_net_ofi_rdma_send_comm_t *s_comm = (nccl_net_ofi_rdma_send_comm_t *)send_comm;
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = (nccl_net_ofi_rdma_mr_handle_t *)mhandle;
-	nccl_net_ofi_rdma_ep_t *ep = NULL;
+	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
+	nccl_net_ofi_rdma_device_t *device = rdma_endpoint_get_device(ep);
+	start_handler(device, "Send");
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	uint16_t msg_seq_num = s_comm->next_msg_seq_num;
 	bool polled_cq = false;
@@ -5776,7 +5785,6 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 
 	dev_id = s_comm->base.base.dev_id;
 
-	ep = (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
 	assert(ep != NULL);
 
 	ret = process_cq_if_pending(ep);
@@ -5896,6 +5904,7 @@ retry:
 	 * so update the num inflight
 	 */
 	(s_comm->num_inflight_reqs)++;
+	device->num_inflight_sends++;
 
 	NCCL_OFI_TRACE_SEND(req->dev_id, size, s_comm, msg_seq_num, req, base_req);
 
@@ -5931,6 +5940,7 @@ retry:
 		req->free(req, false);
 	*base_req = NULL;
  exit:
+	end_handler(device);
 	return ret;
 }
 

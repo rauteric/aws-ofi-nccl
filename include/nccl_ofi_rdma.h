@@ -21,6 +21,7 @@ extern "C" {
 #include "nccl_ofi_idpool.h"
 #include "nccl_ofi_tracepoint.h"
 #include "nccl_ofi_ep_addr_list.h"
+#include <time.h>
 
 /* Maximum number of rails supported. This defines the size of
  * messages exchanged during connection establishment (linear
@@ -825,6 +826,11 @@ typedef struct nccl_net_ofi_rdma_device {
 #if HAVE_NVTX_TRACING
 	nvtxDomainHandle_t nvtx_domain[MAX_NUM_RAILS];
 #endif
+
+	int num_inflight_sends;
+	int num_inflight_recvs;
+	bool reqs_inflight;
+	struct timespec last;
 } nccl_net_ofi_rdma_device_t;
 
 
@@ -842,6 +848,31 @@ typedef struct nccl_net_ofi_rdma_plugin nccl_net_ofi_rdma_plugin_t;
 int nccl_net_ofi_rdma_init(const char *provider_filter,
 			   nccl_net_ofi_plugin_t **plugin_p,
 			   bool *found_multi_rail);
+
+static inline int64_t timespec_duration_ns(struct timespec t0, struct timespec t1)
+{
+	return 1000000000LL * (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec);
+}
+
+static inline void start_handler(nccl_net_ofi_rdma_device_t *device, const char *func)
+{
+	if (device->reqs_inflight) {
+		struct timespec ts;
+		int ret = clock_gettime(CLOCK_MONOTONIC, &ts);
+		if (ret != 0) abort();
+		int dev = device->base.dev_id;
+		int64_t call_delay = timespec_duration_ns(device->last, ts);
+		NCCL_OFI_TRACE_PLUGIN_CALL_DELAY(dev, device->num_inflight_sends, device->num_inflight_recvs, call_delay, func);
+	}
+}
+
+static inline void end_handler(nccl_net_ofi_rdma_device_t *device)
+{
+	device->reqs_inflight = (device->num_inflight_sends > 0 ||
+				 device->num_inflight_recvs > 0);
+	int ret = clock_gettime(CLOCK_MONOTONIC, &device->last);
+	if (ret != 0) abort();
+}
 
 #ifdef __cplusplus
 } // End extern "C"

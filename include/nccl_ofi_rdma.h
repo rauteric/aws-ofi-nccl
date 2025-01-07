@@ -201,9 +201,9 @@ typedef struct {
 	nccl_ofi_freelist_elem_t *eager_buff_fl_elem;
 
 	/*
-	 * Back-pointer to rail
+	 * Back-pointer to endpoint
 	 */
-	nccl_net_ofi_ep_rail_t *rail;
+	nccl_net_ofi_rdma_ep_t *ep;
 
 } rdma_req_eager_recv_data_t;
 
@@ -212,9 +212,9 @@ typedef struct {
 	nccl_ofi_freelist_elem_t *ctrl_msg_fl_elem;
 
 	/*
-	 * Back-pointer to rail
+	 * Back-pointer to endpoint
 	 */
-	nccl_net_ofi_ep_rail_t *rail;
+	nccl_net_ofi_rdma_ep_t *ep;
 
 } rdma_req_ctrl_recv_data_t;
 
@@ -390,6 +390,8 @@ typedef struct nccl_net_ofi_rdma_req {
 		rdma_req_recv_segms_data_t recv_segms_data;
 		rdma_req_flush_data_t flush_data;
 		rdma_req_bounce_data_t bounce_data;
+		rdma_req_eager_recv_data_t eager_recv_data;
+		rdma_req_ctrl_recv_data_t ctrl_recv_data;
 	};
 
 	/* Size of completed request */

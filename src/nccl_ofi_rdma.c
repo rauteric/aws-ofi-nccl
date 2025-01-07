@@ -632,9 +632,9 @@ static inline int get_properties(nccl_net_ofi_device_t *base_dev,
 /*
  * @brief	Return bounce data struct of bounce request
  */
-static inline rdma_req_bounce_data_t *get_bounce_data(nccl_net_ofi_rdma_req_t *req) {
-	assert(req->type == NCCL_OFI_RDMA_BOUNCE);
-	return &req->bounce_data;
+static inline rdma_req_eager_recv_data_t *eager_recv_data_get(nccl_net_ofi_rdma_req_t *req) {
+	assert(req->type == NCCL_OFI_RDMA_EAGER_RECV);
+	return &req->eager_recv_data;
 }
 
 /*
@@ -2318,6 +2318,45 @@ static inline nccl_net_ofi_rdma_req_t *alloc_bounce_req(nccl_net_ofi_rdma_ep_t *
 	bounce_data->buff_len = ep->bounce_buff_size;
 	bounce_data->rail = rail;
 	bounce_data->ep = ep;
+	return req;
+}
+
+static inline int eager_recv_req_free(nccl_net_ofi_rdma_req_t *req, bool dec_inflight_reqs)
+{
+	assert(!dec_inflight_reqs);
+	rdma_req_eager_recv_data_t *eager_recv_data = eager_recv_data_get(req);
+
+	nccl_net_ofi_rdma_ep_t *ep = eager_recv_data->ep;
+
+	/* Free buffer */
+	if (eager_recv_data->eager_buff_fl_elem) {
+		nccl_ofi_freelist_entry_free(ep->eager_buff_fl, eager_recv_data->eager_buff_fl_elem);
+		eager_recv_data->eager_buff_fl_elem = NULL;
+	}
+	return free_base_req(NULL, ep->bounce_buff_reqs_fl, req, false);
+}
+
+static inline nccl_net_ofi_rdma_req_t *eager_recv_req_alloc(nccl_net_ofi_rdma_ep_t *ep,
+							    nccl_net_ofi_ep_rail_t *rail)
+{
+	nccl_net_ofi_rdma_req_t *req = allocate_req(ep->recv_req_fl);
+	if (!req) return NULL;
+
+	req->comm = NULL;
+	req->type = NCCL_OFI_RDMA_EAGER_RECV;
+	req->dev_id = rdma_endpoint_get_device(ep)->base.dev_id;
+	req->free = eager_recv_req_free;
+
+	rdma_req_eager_recv_data_t *eager_recv_data = eager_recv_data_get(req);
+	eager_recv_data->eager_buff_fl_elem =
+		nccl_ofi_freelist_entry_alloc(ep->eager_buff_fl);
+	if (eager_recv_data->eager_buff_fl_elem == NULL) {
+		req->free(req, false);
+		return NULL;
+	}
+
+	eager_recv_data->rail = rail;
+
 	return req;
 }
 

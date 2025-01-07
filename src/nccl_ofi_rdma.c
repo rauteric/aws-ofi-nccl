@@ -6135,7 +6135,7 @@ error:
 }
 
 /*
- * @brief	Initialize bounce buffer data of endpoint
+ * @brief	Initialize recv buffer data of endpoint
  *
  * @param	ep
  *		Endpoint with bounce buffer and bounce requests not being
@@ -6143,58 +6143,69 @@ error:
  * @return	0, on success
  *		non-zero, on error
  */
-static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
+static inline int init_recv_buffers(nccl_net_ofi_rdma_ep_t *ep)
 {
 	int ret = 0;
 	nccl_net_ofi_ep_rail_t *rail;
 
 	ret = nccl_ofi_freelist_init(sizeof(nccl_net_ofi_rdma_req_t),
 				     ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
-				     &ep->bounce_buff_reqs_fl);
+				     &ep->recv_req_fl);
 	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to init bounce_buff_reqs_fl");
+		NCCL_OFI_WARN("Failed to init recv_req_fl");
 		return ret;
 	}
 
-	ret = nccl_ofi_freelist_init_mr(ep->bounce_buff_size,
+	ret = nccl_ofi_freelist_init_mr(eager_max_size,
 					ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
 					freelist_regmr_host_fn, freelist_deregmr_host_fn,
-					ep, BOUNCE_BUFFER_ALIGNMENT, &ep->bounce_buff_fl);
+					ep, BOUNCE_BUFFER_ALIGNMENT, &ep->eager_buff_fl);
 	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to init bounce_buff_fl");
-		if (nccl_ofi_freelist_fini(ep->bounce_buff_reqs_fl))
-			NCCL_OFI_WARN("Also failed to freelist_fini bounce_buff_reqs_fl");
+		NCCL_OFI_WARN("Failed to init eager_buff_fl");
+		nccl_ofi_freelist_fini(ep->recv_req_fl);
 		return ret;
 	}
 
+	const size_t ctrl_max_size = NCCL_OFI_MAX(sizeof(nccl_net_ofi_rdma_ctrl_msg_t),
+					sizeof(nccl_ofi_rdma_connection_info_t));
+	ret = nccl_ofi_freelist_init_mr(ctrl_max_size,
+					ofi_nccl_rdma_min_posted_bounce_buffers(), 16, 0,
+					freelist_regmr_host_fn, freelist_deregmr_host_fn,
+					ep, 1, &ep->ctrl_msg_fl);
+	if (ret != 0) {
+		NCCL_OFI_WARN("Failed to init ctrl_msg_fl");
+		nccl_ofi_freelist_fini(ep->eager_buff_fl);
+		nccl_ofi_freelist_fini(ep->recv_req_fl);
+		return ret;
+	}
 	/*
-	 * The *_bounce_posted limits are used in the progress engine to
+	 * The *_recv_posted limits are used in the progress engine to
 	 * determine if the receive queue is hydrated with sufficient buffers.
 	 * The parameters account for all the rails, so scale down bounds to
 	 * what a single rail would need.
 	 */
 	for (int rail_id = 0; rail_id < ep->num_control_rails; ++rail_id) {
 		rail = rdma_endpoint_get_control_rail(ep, rail_id);
-		rail->min_bounce_posted = NCCL_OFI_DIV_CEIL(
+		rail->min_recv_posted = NCCL_OFI_DIV_CEIL(
 			ofi_nccl_rdma_min_posted_bounce_buffers(), ep->num_control_rails
 		);
-		rail->max_bounce_posted = NCCL_OFI_DIV_CEIL(
+		rail->max_recv_posted = NCCL_OFI_DIV_CEIL(
 			ofi_nccl_rdma_max_posted_bounce_buffers(), ep->num_control_rails
 		);
-		rail->num_bounce_posted = 0;
-		nccl_net_ofi_mutex_init(&rail->bounce_mutex, NULL);
+		rail->num_recv_posted = 0;
+		nccl_net_ofi_mutex_init(&rail->recv_mutex, NULL);
 	}
 
 	for (int rail_id = 0; rail_id < ep->num_rails; ++rail_id) {
 		rail = rdma_endpoint_get_rail(ep, rail_id);
-		rail->min_bounce_posted = NCCL_OFI_DIV_CEIL(
+		rail->min_recv_posted = NCCL_OFI_DIV_CEIL(
 			ofi_nccl_rdma_min_posted_bounce_buffers(), ep->num_rails
 		);
-		rail->max_bounce_posted = NCCL_OFI_DIV_CEIL(
+		rail->max_recv_posted = NCCL_OFI_DIV_CEIL(
 			ofi_nccl_rdma_max_posted_bounce_buffers(), ep->num_rails
 		);
-		rail->num_bounce_posted = 0;
-		nccl_net_ofi_mutex_init(&rail->bounce_mutex, NULL);
+		rail->num_recv_posted = 0;
+		nccl_net_ofi_mutex_init(&rail->recv_mutex, NULL);
 	}
 
 	return ret;
@@ -6209,31 +6220,37 @@ static inline int init_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
  * @return	0, on success
  *		non-zero, on error
  */
-static inline int fini_bounce_buffers(nccl_net_ofi_rdma_ep_t *ep)
+static inline int fini_recv_buffers(nccl_net_ofi_rdma_ep_t *ep)
 {
 	int ret = 0;
 	nccl_net_ofi_ep_rail_t *rail;
 
-	ret = nccl_ofi_freelist_fini(ep->bounce_buff_fl);
+	ret = nccl_ofi_freelist_fini(ep->ctrl_msg_fl);
 	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to fini bounce_buff_fl");
+		NCCL_OFI_WARN("Failed to fini ctrl_msg_fl");
 		return ret;
 	}
 
-	ret = nccl_ofi_freelist_fini(ep->bounce_buff_reqs_fl);
+	ret = nccl_ofi_freelist_fini(ep->eager_buff_fl);
 	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to fini bounce_buff_reqs_fl");
+		NCCL_OFI_WARN("Failed to fini eager_buff_fl");
+		return ret;
+	}
+
+	ret = nccl_ofi_freelist_fini(ep->recv_req_fl);
+	if (ret != 0) {
+		NCCL_OFI_WARN("Failed to fini recv_req_fl");
 		return ret;
 	}
 
 	for (int rail_id = 0; rail_id < ep->num_rails; ++rail_id) {
 		rail = rdma_endpoint_get_rail(ep, rail_id);
-		nccl_net_ofi_mutex_destroy(&rail->bounce_mutex);
+		nccl_net_ofi_mutex_destroy(&rail->recv_mutex);
 	}
 
 	for (int rail_id = 0; rail_id < ep->num_control_rails; ++rail_id) {
 		rail = rdma_endpoint_get_control_rail(ep, rail_id);
-		nccl_net_ofi_mutex_destroy(&rail->bounce_mutex);
+		nccl_net_ofi_mutex_destroy(&rail->recv_mutex);
 	}
 
 	return ret;
@@ -7178,9 +7195,6 @@ static int nccl_net_ofi_rdma_domain_create_endpoint(nccl_net_ofi_domain_t *base_
 		goto error;
 	}
 
-	ep->bounce_buff_size = NCCL_OFI_MAX(NCCL_OFI_MAX(sizeof(nccl_net_ofi_rdma_ctrl_msg_t), eager_max_size),
-						sizeof(nccl_ofi_rdma_connection_info_t));
-
 	ep->is_endpoint_per_communicator_ep = false;
 
 	ret = init_rail_ofi_resources(device, domain, ep);
@@ -7188,14 +7202,14 @@ static int nccl_net_ofi_rdma_domain_create_endpoint(nccl_net_ofi_domain_t *base_
 		goto error;
 	}
 
-	ret = init_bounce_buffers(ep);
+	ret = init_recv_buffers(ep);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Preparation of bounce buffers failed");
 		goto error;
 	}
 
 	/* Post all bounce buffers */
-	ret = post_bounce_buffs(ep);
+	ret = post_recv_buffs(ep);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Posting of bounce buffers failed!");
 		goto error;

@@ -1266,43 +1266,11 @@ static int handle_close_msg_recv(nccl_net_ofi_rdma_req_t *bounce_req)
 	return repost_bounce_buff(ep, bounce_req);
 }
 
-/**
- * @brief	Handle receiving a bounce buffer message. These are:
- * 		connect messages (l_comm), connect response messages (s_comm),
- * 		RDMA control messages (s_comm), eager messages (r_comm).
- */
-static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rail_id, struct fi_cq_data_entry *cq_entry,
-				     nccl_net_ofi_rdma_req_t *bounce_req, bool eager)
+static inline int handle_ctrl_recv(nccl_net_ofi_rdma_req_t *recv_req)
 {
-	int ret = 0;
-	rdma_req_bounce_data_t *bounce_data = NULL;
-	nccl_ofi_rdma_connection_info_t *conn_msg = NULL;
-	nccl_ofi_rdma_connection_info_t *conn_resp_msg = NULL;
-	nccl_net_ofi_rdma_ctrl_msg_t *ctrl_msg = NULL;
-	nccl_net_ofi_rdma_listen_comm_t *l_comm = NULL;
-	nccl_net_ofi_rdma_send_comm_t *s_comm = NULL;
-	nccl_net_ofi_rdma_recv_comm_t *r_comm = NULL;
-
-	if (OFI_UNLIKELY(bounce_req == NULL)) {
-		NCCL_OFI_WARN("RECV event had NULL ctx!");
-		return -EINVAL;
-	}
-	if (OFI_UNLIKELY(bounce_req->type != NCCL_OFI_RDMA_BOUNCE)) {
-		NCCL_OFI_WARN("Invalid non-bounce request as ctx!");
-		return -EINVAL;
-	}
-
-	bounce_data = get_bounce_data(bounce_req);
-	bounce_data->recv_len = cq_entry->len;
-
-	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
-
-	/* The first 4 bits are the type, but we don't have a base
-	 * header type.  So cast to a control message and lookup the
-	 * type from there. */
-	nccl_ofi_rdma_msg_type_t msg_type = eager ? (nccl_ofi_rdma_msg_type_t)NCCL_OFI_RDMA_MSG_EAGER
-	                                          :  get_bounce_ctrl_msg(bounce_data)->type;
-
+	/* TODO */
+	abort();
+	nccl_ofi_rdma_msg_type_t msg_type = TODO;
 	switch (msg_type) {
 	case NCCL_OFI_RDMA_MSG_CONN:
 		/* CONN receive completion */
@@ -1381,22 +1349,53 @@ static inline int handle_bounce_recv(nccl_net_ofi_rdma_device_t *device, int rai
 
 		break;
 	case NCCL_OFI_RDMA_MSG_EAGER:
+	default:
+		NCCL_OFI_WARN("Recv completion with unexpected type");
+		ret = -EINVAL;
+		goto exit;
+	}
+}
+
+/**
+ * @brief	Handle receiving a recv completion. These are:
+ * 		connect messages (l_comm), connect response messages (s_comm),
+ * 		RDMA control messages (s_comm), eager messages (r_comm).
+ */
+static inline int handle_recv_comp(nccl_net_ofi_rdma_device_t *device, int rail_id,
+				   struct fi_cq_data_entry *cq_entry,
+				   nccl_net_ofi_rdma_req_t *recv_req)
+{
+	int ret = 0;
+
+	if (OFI_UNLIKELY(recv_req == NULL)) {
+		NCCL_OFI_WARN("RECV event had NULL ctx!");
+		return -EINVAL;
+	}
+
+	switch (recv_req->type) {
+	case NCCL_OFI_RDMA_CTRL_RECV: {
+		ret = handle_ctrl_recv(recv_req);
+		break;
+	}
+	case NCCL_OFI_RDMA_EAGER_RECV: {
 		/* Eager message receive completion */
+		rdma_req_eager_recv_data_t *eager_recv_data = eager_recv_data_get(recv_req);
 
 		r_comm = rdma_device_get_recv_comm(device, GET_COMM_ID_FROM_IMM(cq_entry->data));
 
 		NCCL_OFI_TRACE_EAGER_RECV(r_comm->base.base.dev_id, rail_id, r_comm,
 					  GET_SEQ_NUM_FROM_IMM(cq_entry->data));
 
-		ret = handle_eager_recv(r_comm, GET_SEQ_NUM_FROM_IMM(cq_entry->data), bounce_req);
+		ret = handle_eager_recv(r_comm, GET_SEQ_NUM_FROM_IMM(cq_entry->data), recv_req);
 		if (OFI_UNLIKELY(ret != 0)) {
 			goto exit;
 		}
+
 		break;
+	}
 	default:
-		NCCL_OFI_WARN("Recv completion with unexpected type");
-		ret = -EINVAL;
-		goto exit;
+		NCCL_OFI_WARN("Recv completion with invalid request type");
+		return -EINVAL;
 	}
 exit:
 	return ret;
@@ -1616,8 +1615,7 @@ static inline int process_completions(struct fi_cq_data_entry *cq_entry, uint64_
 			}
 		} else if (comp_flags & FI_RECV) {
 			/* Receive completions */
-			ret = handle_bounce_recv(device, rail_id, &cq_entry[comp_idx], req,
-						 comp_flags & FI_REMOTE_CQ_DATA);
+			ret = handle_recv_comp(device, rail_id, &cq_entry[comp_idx], req);
 
 		} else if (comp_flags & FI_REMOTE_WRITE) {
 			/* Remote-initiated write is complete */

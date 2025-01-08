@@ -200,6 +200,8 @@ typedef struct {
 
 	nccl_ofi_freelist_elem_t *eager_buff_fl_elem;
 
+	size_t buff_len;
+
 	/*
 	 * Back-pointer to endpoint
 	 */
@@ -210,6 +212,8 @@ typedef struct {
 typedef struct {
 
 	nccl_ofi_freelist_elem_t *ctrl_msg_fl_elem;
+
+	size_t buff_len;
 
 	/*
 	 * Back-pointer to endpoint

@@ -5491,11 +5491,34 @@ static int post_recv_buff(nccl_net_ofi_rdma_req_t *req,
 			      nccl_net_ofi_ep_rail_t *ep_rail,
 			      bool set_fi_more)
 {
-	rdma_req_bounce_data_t *bounce_data = get_bounce_data(req);
-	nccl_ofi_freelist_elem_t *bounce_fl_elem = bounce_data->bounce_fl_elem;
+	nccl_ofi_freelist_t *fl = NULL;
+	nccl_ofi_freelist_elem_t *fl_elem = NULL;
+	nccl_net_ofi_rdma_ep_t *ep = NULL;
+	size_t buff_len = 0;
+
+	switch (req->type) {
+	case NCCL_OFI_RDMA_EAGER_RECV: {
+		fl = ep->eager_buff_fl;
+		rdma_req_eager_recv_data_t *eager_recv_data = eager_recv_data_get(req);
+		fl_elem = eager_recv_data->eager_buff_fl_elem;
+		ep = eager_recv_data->ep;
+		buff_len = eager_recv_data->buff_len;
+		break;
+	}
+	case NCCL_OFI_RDMA_CTRL_RECV: {
+		/* TODO */
+		abort();
+		break;
+	}
+	default:
+		NCCL_OFI_WARN("Invalid request type");
+		assert(false);
+		return -EINVAL;
+	}
+
 	freelist_regmr_fn_handle_t *fl_mr_handle =
-		(freelist_regmr_fn_handle_t *)bounce_fl_elem->mr_handle;
-	void *desc = fi_mr_desc(fl_mr_handle->mr_handle->mr[bounce_data->rail->rail_id]);
+		(freelist_regmr_fn_handle_t *)fl_elem->mr_handle;
+	void *desc = fi_mr_desc(fl_mr_handle->mr_handle->mr[ep_rail->rail_id]);
 	struct iovec iov;
 	struct fi_msg msg;
 	uint64_t flags = 0;
@@ -5507,12 +5530,10 @@ static int post_recv_buff(nccl_net_ofi_rdma_req_t *req,
 	/* Reset memcheck guards of bounce buffer freelist entry to
 	 * accessible but undefined to cover cases where the buffer
 	 * gets re-posted */
- 	nccl_net_ofi_rdma_ep_t *ep = bounce_data->ep;
-	nccl_ofi_freelist_entry_set_undefined(ep->bounce_buff_fl,
-					      bounce_fl_elem->ptr);
+	nccl_ofi_freelist_entry_set_undefined(fl, fl_elem->ptr);
 
-	iov.iov_base = bounce_fl_elem->ptr;
-	iov.iov_len = bounce_data->buff_len;
+	iov.iov_base = fl_elem->ptr;
+	iov.iov_len = buff_len;
 
 	msg.msg_iov = &iov;
 	msg.desc = &desc;
@@ -5523,7 +5544,7 @@ static int post_recv_buff(nccl_net_ofi_rdma_req_t *req,
 	req->state = NCCL_OFI_RDMA_REQ_CREATED;
 	ssize_t rc = fi_recvmsg(ep_rail->ofi_ep, &msg, flags);
 	if ((rc != 0) && (rc != -FI_EAGAIN)) {
-		NCCL_OFI_WARN("Error posting bounce buffer. RC: %zd, Error: %s",
+		NCCL_OFI_WARN("Error posting recv buffer. RC: %zd, Error: %s",
 			      rc, fi_strerror(-rc));
 	}
 

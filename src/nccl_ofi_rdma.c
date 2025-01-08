@@ -1556,6 +1556,8 @@ static int post_flush_req(nccl_net_ofi_rdma_req_t *req);
 
 static int post_eager_copy(nccl_net_ofi_rdma_req_t *req);
 
+static int post_recv_buff(nccl_net_ofi_rdma_req_t *req);
+
 /*
  * @brief	Processes completion entries from CQ
  *
@@ -1839,7 +1841,6 @@ static int receive_progress(nccl_net_ofi_rdma_req_t *req, bool add_to_pending)
 		case NCCL_OFI_RDMA_RECV:
 		case NCCL_OFI_RDMA_SEND:
 		case NCCL_OFI_RDMA_RECV_SEGMS:
-		case NCCL_OFI_RDMA_BOUNCE:
 		case NCCL_OFI_RDMA_SEND_CONN:
 		case NCCL_OFI_RDMA_RECV_CONN:
 		case NCCL_OFI_RDMA_RECV_CONN_RESP:
@@ -2382,26 +2383,26 @@ static inline int handle_bounce_eagain(nccl_net_ofi_rdma_ep_t *ep,
 	return ret;
 }
 
-static inline int post_bounce_buffs_on_rail(nccl_net_ofi_rdma_ep_t *ep,
+static inline int post_recv_buffs_on_rail(nccl_net_ofi_rdma_ep_t *ep,
 					    nccl_net_ofi_ep_rail_t *rail)
 {
 	int ret = 0;
 
-	nccl_net_ofi_mutex_lock(&rail->bounce_mutex);
+	nccl_net_ofi_mutex_lock(&rail->recv_mutex);
 
-	size_t buffers_needed = rail->max_bounce_posted -
-				rail->num_bounce_posted;
-	rail->num_bounce_posted = rail->max_bounce_posted;
+	size_t buffers_needed = rail->max_recv_posted -
+				rail->num_recv_posted;
+	rail->num_recv_posted = rail->max_recv_posted;
 
-	nccl_net_ofi_mutex_unlock(&rail->bounce_mutex);
+	nccl_net_ofi_mutex_unlock(&rail->recv_mutex);
 
 	/* Post all the bounce buffers we need */
 	for (size_t i = 0; i < buffers_needed; ++i) {
 		bool is_last_req = (i == (buffers_needed - 1));
 		nccl_net_ofi_rdma_req_t *req =
-			alloc_bounce_req(ep, rail);
+			rail->recv_buff_req_alloc(ep, rail);
 		if (!req) {
-			NCCL_OFI_WARN("Failed to allocate bounce req");
+			NCCL_OFI_WARN("Failed to allocate recv buff req");
 			return -ENOMEM;
 		}
 
@@ -5486,7 +5487,7 @@ static int post_rdma_eager_send(nccl_net_ofi_rdma_req_t *req,
 	return rc;
 }
 
-static int post_bounce_buffer(nccl_net_ofi_rdma_req_t *req,
+static int post_recv_buff(nccl_net_ofi_rdma_req_t *req,
 			      nccl_net_ofi_ep_rail_t *ep_rail,
 			      bool set_fi_more)
 {
@@ -6233,6 +6234,7 @@ static inline int init_recv_buffers(nccl_net_ofi_rdma_ep_t *ep)
 		);
 		rail->num_recv_posted = 0;
 		nccl_net_ofi_mutex_init(&rail->recv_mutex, NULL);
+		rail->recv_buff_req_alloc = TODO;
 	}
 
 	for (int rail_id = 0; rail_id < ep->num_rails; ++rail_id) {
@@ -6245,6 +6247,7 @@ static inline int init_recv_buffers(nccl_net_ofi_rdma_ep_t *ep)
 		);
 		rail->num_recv_posted = 0;
 		nccl_net_ofi_mutex_init(&rail->recv_mutex, NULL);
+		rail->recv_buff_req_alloc = eager_recv_req_alloc;
 	}
 
 	return ret;

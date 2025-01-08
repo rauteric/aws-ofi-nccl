@@ -1556,7 +1556,7 @@ static int post_flush_req(nccl_net_ofi_rdma_req_t *req);
 
 static int post_eager_copy(nccl_net_ofi_rdma_req_t *req);
 
-static int post_recv_buff(nccl_net_ofi_rdma_req_t *req);
+static int post_recv_buffer(nccl_net_ofi_rdma_req_t *req);
 
 /*
  * @brief	Processes completion entries from CQ
@@ -1647,7 +1647,6 @@ static inline int process_completions(struct fi_cq_data_entry *cq_entry, uint64_
 			case NCCL_OFI_RDMA_SEND_CLOSE:
 			case NCCL_OFI_RDMA_RECV_SEGMS:
 			case NCCL_OFI_RDMA_EAGER_COPY:
-			case NCCL_OFI_RDMA_BOUNCE:
 			case NCCL_OFI_RDMA_FLUSH:
 			case NCCL_OFI_RDMA_SEND_CONN:
 			case NCCL_OFI_RDMA_RECV_CONN:
@@ -2361,7 +2360,7 @@ static inline nccl_net_ofi_rdma_req_t *eager_recv_req_alloc(nccl_net_ofi_rdma_ep
 	return req;
 }
 
-static inline int handle_bounce_eagain(nccl_net_ofi_rdma_ep_t *ep,
+static inline int handle_recv_eagain(nccl_net_ofi_rdma_ep_t *ep,
 				       nccl_net_ofi_ep_rail_t *rail,
 				       nccl_net_ofi_rdma_req_t *req, size_t num_buffs_failed)
 {
@@ -2373,12 +2372,12 @@ static inline int handle_bounce_eagain(nccl_net_ofi_rdma_ep_t *ep,
 	}
 	NCCL_OFI_TRACE_PENDING_INSERT(req);
 
-	nccl_net_ofi_mutex_lock(&rail->bounce_mutex);
+	nccl_net_ofi_mutex_lock(&rail->recv_mutex);
 
-	assert(rail->num_bounce_posted >= num_buffs_failed);
-	rail->num_bounce_posted -= num_buffs_failed;
+	assert(rail->num_recv_posted >= num_recv_failed);
+	rail->num_recv_posted -= num_buffs_failed;
 
-	nccl_net_ofi_mutex_unlock(&rail->bounce_mutex);
+	nccl_net_ofi_mutex_unlock(&rail->recv_mutex);
 
 	return ret;
 }
@@ -2411,12 +2410,12 @@ static inline int post_recv_buffs_on_rail(nccl_net_ofi_rdma_ep_t *ep,
 		 * handle_bounce_eagain() are posted without FI_MORE,
 		 * so we don't have to handle that case.
 		 */
-		ret = post_bounce_buffer(req, rail, !is_last_req);
+		ret = post_recv_buffer(req, rail, !is_last_req);
 		if (ret == -FI_EAGAIN) {
 			/* Update posted count */
 			/* We failed to post num_buffs_failed buffers that we promised above */
 			size_t num_buffs_failed = buffers_needed - i - 1;
-			ret = handle_bounce_eagain(ep, rail, req, num_buffs_failed);
+			ret = handle_recv_eagain(ep, rail, req, num_buffs_failed);
 			if (ret != 0) return ret;
 
 			break;
@@ -5487,7 +5486,7 @@ static int post_rdma_eager_send(nccl_net_ofi_rdma_req_t *req,
 	return rc;
 }
 
-static int post_recv_buff(nccl_net_ofi_rdma_req_t *req,
+static int post_recv_buffer(nccl_net_ofi_rdma_req_t *req,
 			      nccl_net_ofi_ep_rail_t *ep_rail,
 			      bool set_fi_more)
 {

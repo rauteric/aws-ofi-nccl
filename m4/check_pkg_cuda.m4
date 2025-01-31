@@ -39,7 +39,7 @@ AC_DEFUN([CHECK_PKG_CUDA], [
          cuda_ldpath="${cuda_realpath}/lib64"
          CUDA_LDFLAGS="-L${cuda_ldpath}"
          CUDA_CPPFLAGS="-isystem ${cuda_realpath}/include"
-         CUDA_LIBS="-l${cudart_lib} -lrt -ldl"
+         CUDA_LIBS="-l${cudart_lib} -lcuda -lrt -ldl"
          LDFLAGS="${CUDA_LDFLAGS} ${LDFLAGS}"
          LIBS="${CUDA_LIBS} ${LIBS}"
          CPPFLAGS="${CUDA_CPPFLAGS} ${CPPFLAGS}"

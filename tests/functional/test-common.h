@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <cuda_runtime.h>
+#include <cuda.h>
 #include <nccl/net.h>
 #include <mpi.h>
 
@@ -122,10 +123,16 @@ static inline int is_gdr_supported_nic(uint64_t ptr_support)
 static inline ncclResult_t allocate_buff(void **buf, size_t size, int buffer_type)
 {
 	switch (buffer_type) {
-	case NCCL_PTR_CUDA:
+	case NCCL_PTR_CUDA: {
 		NCCL_OFI_TRACE(NCCL_NET, "Allocating CUDA buffer");
 		CUDACHECK(cudaMalloc(buf, size));
+		int true_flag = 1;
+		CUresult r = cuPointerSetAttribute((void *) &true_flag,
+                          CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                          (CUdeviceptr) (*buf));
+		if (r != CUDA_SUCCESS) abort();
 		break;
+	}
 	case NCCL_PTR_HOST:
 		NCCL_OFI_TRACE(NCCL_NET, "Allocating host buffer");
 		CUDACHECK(cudaHostAlloc(buf, size, cudaHostAllocMapped));

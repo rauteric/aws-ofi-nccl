@@ -28,6 +28,7 @@ nccl_ofi_connection_manager::nccl_ofi_connection_manager(fi_info *info, fid_doma
 		 * TODO revisit */
 		throw std::runtime_error("nccl_ofi_connection_manager: failed call to nccl_ofi_ofiutils_init_connection");
 	}
+
 	nccl_ofi_freelist_t *conn_msg_fl_ptr = nullptr;
 	ret = nccl_ofi_freelist_init_mr(sizeof(nccl_ofi_cm_conn_msg), 4, 4, 0, nullptr, nullptr,
 					    cm_reg_mr, cm_dereg_mr, this, 1, &conn_msg_fl_ptr);

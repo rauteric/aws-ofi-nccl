@@ -110,12 +110,6 @@ nccl_ofi_cm_r_comm::nccl_ofi_cm_r_comm(nccl_ofi_connection_manager *_cm,
 	if (send_elem == NULL) {
 		throw std::runtime_error("Failed to allocate send_elem from freelist");
 	}
-
-	nccl_ofi_cm_conn_msg *conn_resp_msg = static_cast<nccl_ofi_cm_conn_msg *>(send_elem->ptr);
-
-	prepare_conn_resp_msg(conn_resp_msg);
-
-	send_conn_resp_req.set_send_elem(send_elem);
 }
 
 
@@ -126,31 +120,66 @@ nccl_ofi_cm_r_comm::~nccl_ofi_cm_r_comm()
 	cm->get_data_comm_id_pool()->free_id(r_comm_id);
 }
 
-
-void nccl_ofi_cm_r_comm::prepare_conn_resp_msg(nccl_ofi_cm_conn_msg *conn_resp_msg)
+static inline void copy_conn_msg_to_ep_rail_info(const nccl_ofi_cm_conn_msg &conn_msg,
+						 nccl_ofi_cm_ep_rail_info &ret_rail_info)
 {
+	size_t num_ctrl_rails = conn_msg.num_control_rails;
+	ret_rail_info.control_ep_names.reserve(num_ctrl_rails);
+	for (size_t i = 0; i < num_ctrl_rails; ++i) {
+		ret_rail_info.control_ep_names.push_back(conn_msg.control_ep_names[i]);
+	}
+
+	size_t num_rails = conn_msg.num_rails;
+	ret_rail_info.ep_names.reserve(num_rails);
+	for (size_t i = 0; i < num_rails; ++i) {
+		ret_rail_info.ep_names.push_back(conn_msg.ep_names[i]);
+	}
+}
+
+nccl_ofi_cm_ep_rail_info nccl_ofi_cm_r_comm::get_sender_ep_rails()
+{
+	nccl_ofi_cm_ep_rail_info ret_rail_info;
+
+	copy_conn_msg_to_ep_rail_info(conn_msg, ret_rail_info);
+
+	return ret_rail_info;
+}
+
+void nccl_ofi_cm_r_comm::prepare_conn_resp_msg()
+{
+	assert(ep_rail_info);
+
+	nccl_ofi_cm_conn_msg *conn_resp_msg = static_cast<nccl_ofi_cm_conn_msg *>(send_elem->ptr);
+
 	conn_resp_msg->type = nccl_ofi_cm_conn_msg::SEND_CONN_RESP_MSG;
-	conn_resp_msg->num_rails = ep_rail_info.ep_names.size();
-	conn_resp_msg->num_control_rails = ep_rail_info.control_ep_names.size();
+	conn_resp_msg->num_rails = ep_rail_info->ep_names.size();
+	conn_resp_msg->num_control_rails = ep_rail_info->control_ep_names.size();
 
 	conn_resp_msg->local_comm_id = r_comm_id;
 	/* Our response remote_comm_id is the local_comm_id of the received conn msg */
 	conn_resp_msg->remote_comm_id = conn_msg.local_comm_id;
 
-	if (ep_rail_info.ep_names.size() == 0) {
+	if (ep_rail_info->ep_names.size() == 0) {
 		throw std::runtime_error("Rail info not yet initialized");
 	}
 
-	copy_rail_info_to_conn_msg(ep_rail_info, conn_resp_msg);
+	copy_rail_info_to_conn_msg(*ep_rail_info, conn_resp_msg);
 
 	const cm_ep_name &conn_ep_name = cm->get_conn_ep_name();
 	conn_resp_msg->conn_ep_name = conn_ep_name;
+
+	send_conn_resp_req.set_send_elem(send_elem);
 }
 
 
 int nccl_ofi_cm_r_comm::test_ready(bool *ready)
 {
 	int ret = 0;
+
+	if (!ep_rail_info) {
+		NCCL_OFI_WARN("ep_rail_info not initialized -- call set_ep_rail_info first");
+		return -EINVAL;
+	}
 
 	if (!conn_resp_msg_sent) {
 		ret = send_conn_resp_req.post_send();
@@ -254,4 +283,18 @@ int nccl_ofi_cm_s_comm::test_ready(bool *ready)
 	}
 
 	return 0;
+}
+
+
+nccl_ofi_cm_ep_rail_info nccl_ofi_cm_s_comm::get_receiver_ep_rails()
+{
+	nccl_ofi_cm_ep_rail_info ret_rail_info;
+
+	if (!(conn_msg_delivered && received_conn_resp_msg)) {
+		throw new std::runtime_error("cm_s_comm connection is not complete");
+	}
+
+	copy_conn_msg_to_ep_rail_info(*(received_conn_resp_msg), ret_rail_info);
+
+	return ret_rail_info;
 }

@@ -5,69 +5,21 @@
 
 #include <stdexcept>
 
-#include "cm/nccl_ofi_cm.h"
+#include "nccl_ofi.h"
 #include "nccl_ofi_ofiutils.h"
 #include "nccl_ofi_log.h"
 
-static inline int cm_reg_mr(void *cm_ptr, void *data, size_t size, void **mr_handle)
-{
-	int ret = 0;
-	nccl_ofi_cm_mr_handle *ret_handle = nullptr;
-	*mr_handle = nullptr;
+#include "cm/nccl_ofi_cm.h"
+#include "cm/nccl_ofi_cm_mr.h"
 
-	auto cm = static_cast<nccl_ofi_connection_manager *>(cm_ptr);
-
-	fid_domain *domain = cm->get_domain();
-
-	struct fi_mr_attr mr_attr = {};
-	struct iovec _iovec = {data, size};
-	mr_attr.iov_count = 1;
-	mr_attr.mr_iov = &_iovec;
-	mr_attr.iface = FI_HMEM_SYSTEM;
-
-	uint64_t regattr_flags = 0;
-
-	/* TODO key pool */
-
-	/* Allocate rdma memory registration handle */
-	ret_handle = new nccl_ofi_cm_mr_handle{ };
-
-	mr_attr.access = FI_SEND | FI_RECV;
-
-	ret = fi_mr_regattr(domain, &mr_attr,
-			    regattr_flags, &ret_handle->mr);
-	if (ret != 0) {
-		NCCL_OFI_WARN("CM: Unable to register memory. RC: %d, Error: %s",
-			      ret, fi_strerror(-ret));
-		delete ret_handle;
-		return ret;
-	}
-
-	/* TODO fi_endpoint_mr mode */
-
-	*mr_handle = ret_handle;
-	return 0;
-}
-
-static inline int cm_dereg_mr(void *handle)
-{
-	auto mr_handle = static_cast<nccl_ofi_cm_mr_handle *>(handle);
-	int ret = fi_close(&mr_handle->mr->fid);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Unable to de-register memory. RC: %d, Error: %s",
-			      ret, fi_strerror(-ret));
-	}
-	delete mr_handle;
-	return ret;
-}
-
-
-nccl_ofi_connection_manager::nccl_ofi_connection_manager(fi_info *info, fid_domain *_domain, fid_cq *cq,
-							 size_t num_comm_ids)
+nccl_ofi_connection_manager::nccl_ofi_connection_manager(fi_info *info, fid_domain *_domain,
+							 fid_cq *cq, size_t num_comm_ids,
+							 nccl_ofi_idpool_t *_mr_key_pool)
 							 : domain(_domain), conn_msg_fl(),
 							   rx_req_list(),
 							   l_comm_id_pool(num_comm_ids),
-							   data_comm_id_pool(num_comm_ids)
+							   data_comm_id_pool(num_comm_ids),
+							   mr_key_pool(_mr_key_pool)
 {
 	int ret = nccl_ofi_ofiutils_init_connection(info, domain, &ep, &av, &cq);
 	if (ret != 0) {

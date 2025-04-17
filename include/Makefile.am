@@ -42,6 +42,7 @@ noinst_HEADERS = \
 	stats/histogram.h \
 	stats/histogram_binner.h \
 	cm/nccl_ofi_cm_comms.h \
+	cm/nccl_ofi_cm_mr.h \
 	cm/nccl_ofi_cm_reqs.h \
 	cm/nccl_ofi_cm_types.h \
 	cm/nccl_ofi_cm.h

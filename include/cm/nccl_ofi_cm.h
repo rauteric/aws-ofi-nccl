@@ -32,8 +32,9 @@ public:
 class nccl_ofi_connection_manager
 {
 public:
-	nccl_ofi_connection_manager(fi_info *info, fid_domain *domain, fid_cq *cq,
-				    size_t num_comm_ids);
+	nccl_ofi_connection_manager(fi_info *info, fid_domain *_domain,
+				    fid_cq *cq, size_t num_comm_ids,
+				    nccl_ofi_idpool_t *_mr_key_pool);
 	~nccl_ofi_connection_manager();
 
 	nccl_ofi_cm_l_comm *listen();
@@ -69,6 +70,8 @@ public:
 	std::unordered_map<uint32_t, nccl_ofi_cm_s_comm *> *get_s_comm_map()
 	{ return &s_comm_map; }
 
+	nccl_ofi_idpool_t *get_mr_key_pool() {return mr_key_pool;}
+
 private:
 	/* Input */
 	fid_domain *domain;
@@ -86,6 +89,8 @@ private:
 
 	nccl_ofi_idpool_t l_comm_id_pool;
 	nccl_ofi_idpool_t data_comm_id_pool;
+
+	nccl_ofi_idpool_t *mr_key_pool;
 
 	cm_ep_name conn_ep_name;
 

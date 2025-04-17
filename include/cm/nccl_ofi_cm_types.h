@@ -25,6 +25,8 @@ struct cm_ep_name {
 };
 
 struct nccl_ofi_cm_mr_handle {
+	uint64_t mr_key;
+	nccl_ofi_connection_manager *cm;
 	fid_mr *mr;
 };
 

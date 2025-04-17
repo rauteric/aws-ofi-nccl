@@ -16,16 +16,13 @@ static inline int cm_post_send(fid_ep *ep, nccl_ofi_freelist_elem_t *send_elem, 
 
 	ssize_t ret = fi_send(ep, send_elem->ptr, sizeof(nccl_ofi_cm_conn_msg), desc,
 			      dest_addr, &req->ctx.ofi_ctx);
-	if (ret == -FI_EAGAIN) {
-		/* TODO EAGAIN handling */
-		abort();
-	} else if (ret != 0) {
+	if (ret != 0 && ret != -FI_EAGAIN) {
 		NCCL_OFI_WARN("Error in call to fi_send. RC: %zd, Error: %s",
 				ret, fi_strerror(-ret));
 		return static_cast<int>(ret);
 	}
 
-	return 0;
+	return static_cast<int>(ret);
 }
 
 static inline int cm_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
@@ -104,16 +101,13 @@ int nccl_ofi_cm_rx_req::post_rx()
 
 	ssize_t ret = fi_recv(cm->get_ep(), rx_elem->ptr, sizeof(nccl_ofi_cm_conn_msg), desc,
 			      FI_ADDR_UNSPEC, &ctx.ofi_ctx);
-	if (ret == -FI_EAGAIN) {
-		/* TODO EAGAIN handling */
-		abort();
-	} else if (ret != 0) {
+	if (ret != 0 && ret != -FI_EAGAIN) {
 		NCCL_OFI_WARN("Error posting rx buffer. RC: %zd, Error: %s",
 			      ret, fi_strerror(-ret));
 		return static_cast<int>(ret);
 	}
 
-	return 0;
+	return static_cast<int>(ret);
 }
 
 

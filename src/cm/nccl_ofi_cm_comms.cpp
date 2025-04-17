@@ -73,6 +73,11 @@ nccl_ofi_cm_r_comm *nccl_ofi_cm_l_comm::accept()
 		return r_comm;
 	}
 
+	int ret = cm->post_pending_rx_buffers();
+	if (ret != 0) {
+		throw std::runtime_error("Failed to post rx buffers");
+	}
+
 	/* No r_comm is ready */
 	return nullptr;
 }
@@ -145,8 +150,10 @@ void nccl_ofi_cm_r_comm::prepare_conn_resp_msg(nccl_ofi_cm_conn_msg *conn_resp_m
 
 int nccl_ofi_cm_r_comm::test_ready(bool *ready)
 {
+	int ret = 0;
+
 	if (!conn_resp_msg_sent) {
-		int ret = send_conn_resp_req.post_send();
+		ret = send_conn_resp_req.post_send();
 		if (ret == 0) {
 			conn_resp_msg_sent = true;
 		} else if (ret != -FI_EAGAIN) {
@@ -155,6 +162,11 @@ int nccl_ofi_cm_r_comm::test_ready(bool *ready)
 	}
 
 	*ready = conn_resp_msg_delivered;
+
+	ret = cm->post_pending_rx_buffers();
+	if (ret != 0) {
+		return ret;
+	}
 
 	return 0;
 }
@@ -221,10 +233,12 @@ nccl_ofi_cm_s_comm::~nccl_ofi_cm_s_comm()
 
 int nccl_ofi_cm_s_comm::test_ready(bool *ready)
 {
+	int ret = 0;
+
 	*ready = false;
 
 	if (!conn_msg_sent) {
-		int ret = send_conn_req.post_send();
+		ret = send_conn_req.post_send();
 		if (ret == 0) {
 			conn_msg_sent = true;
 		} else if (ret != -FI_EAGAIN) {
@@ -233,5 +247,11 @@ int nccl_ofi_cm_s_comm::test_ready(bool *ready)
 	}
 
 	*ready = (conn_msg_delivered && received_conn_resp_msg);
+
+	ret = cm->post_pending_rx_buffers();
+	if (ret != 0) {
+		return ret;
+	}
+
 	return 0;
 }

@@ -16,7 +16,7 @@ nccl_ofi_connection_manager::nccl_ofi_connection_manager(fi_info *info, fid_doma
 							 fid_cq *cq, size_t num_comm_ids,
 							 nccl_ofi_idpool_t *_mr_key_pool)
 							 : domain(_domain), conn_msg_fl(),
-							   rx_req_list(),
+							   rx_req_list(), pending_rx_reqs(),
 							   l_comm_id_pool(num_comm_ids),
 							   data_comm_id_pool(num_comm_ids),
 							   mr_key_pool(_mr_key_pool)
@@ -39,7 +39,7 @@ nccl_ofi_connection_manager::nccl_ofi_connection_manager(fi_info *info, fid_doma
 
 	set_conn_ep_name();
 
-	post_rx_buffers();
+	init_rx_buffers();
 }
 
 
@@ -67,21 +67,38 @@ void nccl_ofi_connection_manager::set_conn_ep_name()
 }
 
 
-void nccl_ofi_connection_manager::post_rx_buffers()
+void nccl_ofi_connection_manager::init_rx_buffers()
 {
 	/* TODO make this a parameter */
 	const size_t num_rx_buffer = 1;
 	rx_req_list.reserve(num_rx_buffer);
 
 	for (size_t i = 0; i < num_rx_buffer; ++i) {
-		rx_req_list.emplace_back(this);
-		int ret = rx_req_list[i].post_rx();
+		rx_req_list.emplace_back(new nccl_ofi_cm_rx_req(this));
+		int ret = rx_req_list[i]->post_rx();
 		if (ret == -FI_EAGAIN) {
-			/* TODO */ abort();
+			pending_rx_reqs.emplace_back(rx_req_list[i].get());
 		} else if (ret != 0) {
 			throw std::runtime_error("Failed to post rx buffer");
 		}
 	}
+}
+
+
+int nccl_ofi_connection_manager::post_pending_rx_buffers()
+{
+	for (auto it = pending_rx_reqs.begin(); it != pending_rx_reqs.end(); ) {
+		nccl_ofi_cm_rx_req *req = *it;
+		int ret = req->post_rx();
+		if (ret == -FI_EAGAIN) {
+			break;
+		} else if (ret != 0) {
+			return ret;
+		}
+
+		it = pending_rx_reqs.erase(it);
+	}
+	return 0;
 }
 
 

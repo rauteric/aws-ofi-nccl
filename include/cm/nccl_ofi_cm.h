@@ -72,6 +72,7 @@ public:
 
 	nccl_ofi_idpool_t *get_mr_key_pool() {return mr_key_pool;}
 
+	int post_pending_rx_buffers();
 private:
 	/* Input */
 	fid_domain *domain;
@@ -84,8 +85,12 @@ private:
 
 	std::unique_ptr<nccl_ofi_freelist_t, freelist_deleter> conn_msg_fl;
 
-	/* This must appear after conn_msg_fl so it is destructed first... */
-	std::vector<nccl_ofi_cm_rx_req> rx_req_list;
+	/* This must appear after conn_msg_fl so it is destructed first,
+	   since rx_req destructor returns buffer to freelist */
+	std::vector<std::unique_ptr<nccl_ofi_cm_rx_req>> rx_req_list;
+
+	/* rx reqs that need to be posted (due to EAGAIN) */
+	std::deque<nccl_ofi_cm_rx_req *> pending_rx_reqs;
 
 	nccl_ofi_idpool_t l_comm_id_pool;
 	nccl_ofi_idpool_t data_comm_id_pool;
@@ -96,7 +101,7 @@ private:
 
 	void set_conn_ep_name();
 
-	void post_rx_buffers();
+	void init_rx_buffers();
 };
 
 #endif /* NCCL_OFI_CM_H_ */

@@ -90,7 +90,7 @@ public:
 	 * The caller (transport) should return this handle back to NCCL to
 	 * be delivered out-of-band to the remote (send side) node
 	 */
-	nccl_ofi_cm_handle get_handle() { return handle; }
+	nccl_net_ofi_conn_handle get_handle() { return handle; }
 
 	/**
 	 * Accept an incoming connect message from the send side to this handle
@@ -116,7 +116,7 @@ public:
 private:
 	nccl_ofi_connection_manager *cm;
 	uint32_t l_comm_id;
-	nccl_ofi_cm_handle handle;
+	nccl_net_ofi_conn_handle handle;
 	std::deque<nccl_ofi_cm_conn_msg> pending_conn_msg;
 };
 
@@ -155,7 +155,7 @@ public:
 	 * should use connection_manager::connect() to obtain a cm_s_comm
 	 */
 	nccl_ofi_cm_s_comm(nccl_ofi_connection_manager *cm,
-			   nccl_ofi_cm_handle *handle,
+			   nccl_net_ofi_conn_handle *handle,
 			   const nccl_ofi_cm_ep_rail_info &ep_rail_info);
 	~nccl_ofi_cm_s_comm();
 
@@ -183,7 +183,7 @@ private:
 
 	nccl_ofi_cm_ep_rail_info ep_rail_info;
 
-	void prepare_conn_msg(nccl_ofi_cm_handle *handle, nccl_ofi_cm_conn_msg *conn_msg);
+	void prepare_conn_msg(nccl_net_ofi_conn_handle *handle, nccl_ofi_cm_conn_msg *conn_msg);
 };
 
 #endif /* NCCL_OFI_CM_H_ */

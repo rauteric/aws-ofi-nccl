@@ -142,12 +142,12 @@ int nccl_ofi_connection_manager::av_insert_address(ep_name address, fi_addr_t *f
 }
 
 
-nccl_ofi_cm_s_comm *nccl_ofi_connection_manager::connect(nccl_ofi_cm_handle *handle,
+nccl_ofi_cm_s_comm *nccl_ofi_connection_manager::connect(nccl_net_ofi_conn_handle *handle,
 							 const nccl_ofi_cm_ep_rail_info &rail_info)
 {
 	nccl_ofi_cm_s_comm *s_comm = new nccl_ofi_cm_s_comm(this, handle, rail_info);
 
-	int ret = this->av_insert_address(handle->name, &s_comm->dest_addr);
+	int ret = this->av_insert_address(handle->ep_name, &s_comm->dest_addr);
 	if (ret != 0) {
 		throw std::runtime_error("Failed call to av_insert_address");
 	}

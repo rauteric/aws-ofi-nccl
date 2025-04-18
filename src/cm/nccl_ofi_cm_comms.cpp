@@ -41,11 +41,10 @@ nccl_ofi_cm_l_comm::nccl_ofi_cm_l_comm(nccl_ofi_connection_manager *_cm) :
 	const cm_ep_name &conn_ep_name = cm->get_conn_ep_name();
 
 	/* Populate handle */
-	memcpy(handle.name, conn_ep_name.name, conn_ep_name.name_len);
+	memcpy(handle.ep_name, conn_ep_name.name, conn_ep_name.name_len);
 
-	handle.l_comm_id = l_comm_id;
-	handle.s_comm = nullptr;
-	handle.r_comm = nullptr;
+	handle.comm_id = l_comm_id;
+	memset(&handle.state, 0, sizeof(handle.state));
 }
 
 
@@ -202,14 +201,14 @@ int nccl_ofi_cm_r_comm::test_ready(bool *ready)
 }
 
 
-void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_ofi_cm_handle *handle, nccl_ofi_cm_conn_msg *conn_msg)
+void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_net_ofi_conn_handle *handle, nccl_ofi_cm_conn_msg *conn_msg)
 {
 	conn_msg->type = nccl_ofi_cm_conn_msg::SEND_CONN_MSG;
 	conn_msg->num_rails = ep_rail_info.ep_names.size();
 	conn_msg->num_control_rails = ep_rail_info.control_ep_names.size();
 
 	conn_msg->local_comm_id = s_comm_id;
-	conn_msg->remote_comm_id = handle->l_comm_id;
+	conn_msg->remote_comm_id = handle->comm_id;
 
 	copy_rail_info_to_conn_msg(ep_rail_info, conn_msg);
 
@@ -219,7 +218,7 @@ void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_ofi_cm_handle *handle, nccl_ofi_c
 
 
 nccl_ofi_cm_s_comm::nccl_ofi_cm_s_comm(nccl_ofi_connection_manager *_cm,
-				       nccl_ofi_cm_handle *handle,
+				       nccl_net_ofi_conn_handle *handle,
 				       const nccl_ofi_cm_ep_rail_info &_ep_rail_info) :
 	cm(_cm),
 	send_elem(nullptr),

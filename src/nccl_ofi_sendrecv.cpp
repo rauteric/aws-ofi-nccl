@@ -1803,6 +1803,7 @@ static int sendrecv_endpoint_listen(nccl_net_ofi_ep_t *base_ep,
 	l_comm->local_ep_addr = local_ep_addr;
 
 	l_comm->cm_l_comm = ep->cm->listen();
+	*handle = l_comm->cm_l_comm->get_handle();
 
 	*listen_comm = (nccl_net_ofi_listen_comm_t *)l_comm;
 	return 0;

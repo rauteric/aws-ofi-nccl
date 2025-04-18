@@ -86,7 +86,7 @@ public:
 	 * @param rail_info: rail information (addresses of data-transfer endpoints to send
 	 * 		     to the remote node)
 	 */
-	nccl_ofi_cm_s_comm *connect(nccl_ofi_cm_handle *handle,
+	nccl_ofi_cm_s_comm *connect(nccl_net_ofi_conn_handle *handle,
 				    const nccl_ofi_cm_ep_rail_info &rail_info);
 
 	/* --------------------------------------------------------- */

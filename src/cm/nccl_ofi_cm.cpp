@@ -16,7 +16,7 @@ nccl_ofi_connection_manager::nccl_ofi_connection_manager(fi_info *info, fid_doma
 							 fid_cq *cq, size_t num_comm_ids,
 							 nccl_ofi_idpool_t *_mr_key_pool)
 							 : domain(_domain), conn_msg_fl(),
-							   rx_req_list(), pending_rx_reqs(),
+							   rx_req_list(), pending_reqs(),
 							   l_comm_id_pool(num_comm_ids),
 							   data_comm_id_pool(num_comm_ids),
 							   mr_key_pool(_mr_key_pool)
@@ -76,9 +76,9 @@ void nccl_ofi_connection_manager::init_rx_buffers()
 
 	for (size_t i = 0; i < num_rx_buffer; ++i) {
 		rx_req_list.emplace_back(new nccl_ofi_cm_rx_req(this));
-		int ret = rx_req_list[i]->post_rx();
+		int ret = rx_req_list[i]->progress();
 		if (ret == -FI_EAGAIN) {
-			pending_rx_reqs.emplace_back(rx_req_list[i].get());
+			append_pending_req(rx_req_list[i].get());
 		} else if (ret != 0) {
 			throw std::runtime_error("Failed to post rx buffer");
 		}
@@ -86,19 +86,22 @@ void nccl_ofi_connection_manager::init_rx_buffers()
 }
 
 
-int nccl_ofi_connection_manager::post_pending_rx_buffers()
+int nccl_ofi_connection_manager::process_pending_reqs()
 {
-	for (auto it = pending_rx_reqs.begin(); it != pending_rx_reqs.end(); ) {
-		nccl_ofi_cm_rx_req *req = *it;
-		int ret = req->post_rx();
+	for (auto it = pending_reqs.begin(); it != pending_reqs.end(); ) {
+		nccl_ofi_cm_req *req = *it;
+
+		int ret = req->progress();
 		if (ret == -FI_EAGAIN) {
+			/* Leave req in the queue for next try */
 			break;
-		} else if (ret != 0) {
+		} else if (ret == 0) {
+			it = pending_reqs.erase(it);
+		} else {
 			return ret;
 		}
-
-		it = pending_rx_reqs.erase(it);
 	}
+
 	return 0;
 }
 
@@ -130,7 +133,7 @@ nccl_ofi_cm_s_comm *nccl_ofi_connection_manager::get_s_comm(uint32_t s_comm_id)
 	}
 }
 
-int nccl_ofi_connection_manager::av_insert_address(ep_name address, fi_addr_t *fi_addr)
+int nccl_ofi_connection_manager::av_insert_address(const ep_name address, fi_addr_t *fi_addr)
 {
 	int ret = fi_av_insert(av, address, 1, fi_addr, 0, NULL);
 	if (OFI_UNLIKELY(ret != 1)) {
@@ -142,12 +145,12 @@ int nccl_ofi_connection_manager::av_insert_address(ep_name address, fi_addr_t *f
 }
 
 
-nccl_ofi_cm_s_comm *nccl_ofi_connection_manager::connect(nccl_ofi_cm_handle *handle,
+nccl_ofi_cm_s_comm *nccl_ofi_connection_manager::connect(nccl_net_ofi_conn_handle *handle,
 							 const nccl_ofi_cm_ep_rail_info &rail_info)
 {
 	nccl_ofi_cm_s_comm *s_comm = new nccl_ofi_cm_s_comm(this, handle, rail_info);
 
-	int ret = this->av_insert_address(handle->name, &s_comm->dest_addr);
+	int ret = this->av_insert_address(handle->ep_name, &s_comm->dest_addr);
 	if (ret != 0) {
 		throw std::runtime_error("Failed call to av_insert_address");
 	}

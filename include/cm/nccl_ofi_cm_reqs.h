@@ -23,12 +23,21 @@ public:
 	nccl_net_ofi_context_t ctx;
 
 	virtual int handle_completion() = 0;
+	virtual int progress() = 0;
+
+	/**
+	 * This abstract base class cannot be constructed, but one could try to
+	 * destruct it using a pointer to this base class. Since the destructor
+	 * is not virtual, prevent this by making the destructor protected.
+	 */
+protected:
+	~nccl_ofi_cm_req() = default;
 };
 
 /**
  * Requests for rx buffers
  */
-class nccl_ofi_cm_rx_req : nccl_ofi_cm_req
+class nccl_ofi_cm_rx_req : public nccl_ofi_cm_req
 {
 public:
 	/**
@@ -43,8 +52,8 @@ public:
 	~nccl_ofi_cm_rx_req();
 
 	virtual int handle_completion();
+	virtual int progress();
 
-	int post_rx();
 private:
 	nccl_ofi_connection_manager *cm;
 	nccl_ofi_freelist_elem_t *rx_elem;
@@ -53,11 +62,11 @@ private:
 /**
  * Send connect message request. Member of cm_s_comm.
  */
-class nccl_ofi_cm_send_conn_req : nccl_ofi_cm_req
+class nccl_ofi_cm_send_conn_req : public nccl_ofi_cm_req
 {
 public:
 	virtual int handle_completion();
-	int post_send();
+	virtual int progress();
 
 	nccl_ofi_cm_send_conn_req(nccl_ofi_cm_s_comm *_cm_s_comm, fid_ep *_ep) :
 		cm_s_comm(_cm_s_comm),
@@ -74,11 +83,11 @@ private:
 /**
  * Send connect response message request. Member of cm_r_comm.
  */
-class nccl_ofi_cm_send_conn_resp_req : nccl_ofi_cm_req
+class nccl_ofi_cm_send_conn_resp_req : public nccl_ofi_cm_req
 {
 public:
 	virtual int handle_completion();
-	int post_send();
+	virtual int progress();
 
 	nccl_ofi_cm_send_conn_resp_req(nccl_ofi_cm_r_comm *_cm_r_comm, fid_ep *_ep) :
 		cm_r_comm(_cm_r_comm),

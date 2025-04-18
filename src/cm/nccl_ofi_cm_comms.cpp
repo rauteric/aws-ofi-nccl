@@ -25,6 +25,22 @@ static inline void copy_rail_info_to_conn_msg(const nccl_ofi_cm_ep_rail_info &ep
 	}
 }
 
+static inline void copy_conn_msg_to_ep_rail_info(const nccl_ofi_cm_conn_msg &conn_msg,
+						 nccl_ofi_cm_ep_rail_info &ret_rail_info)
+{
+	size_t num_ctrl_rails = conn_msg.num_control_rails;
+	ret_rail_info.control_ep_names.reserve(num_ctrl_rails);
+	for (size_t i = 0; i < num_ctrl_rails; ++i) {
+		ret_rail_info.control_ep_names.push_back(conn_msg.control_ep_names[i]);
+	}
+
+	size_t num_rails = conn_msg.num_rails;
+	ret_rail_info.ep_names.reserve(num_rails);
+	for (size_t i = 0; i < num_rails; ++i) {
+		ret_rail_info.ep_names.push_back(conn_msg.ep_names[i]);
+	}
+}
+
 
 nccl_ofi_cm_l_comm::nccl_ofi_cm_l_comm(nccl_ofi_connection_manager *_cm) :
 	cm(_cm)
@@ -41,10 +57,10 @@ nccl_ofi_cm_l_comm::nccl_ofi_cm_l_comm(nccl_ofi_connection_manager *_cm) :
 	const cm_ep_name &conn_ep_name = cm->get_conn_ep_name();
 
 	/* Populate handle */
-	memcpy(handle.name, conn_ep_name.name, conn_ep_name.name_len);
+	memcpy(handle.ep_name, conn_ep_name.name, conn_ep_name.name_len);
 
-	handle.l_comm_id = l_comm_id;
-	handle.s_comm = nullptr;
+	handle.comm_id = l_comm_id;
+	memset(&handle.state, 0, sizeof(handle.state));
 }
 
 
@@ -55,25 +71,35 @@ nccl_ofi_cm_l_comm::~nccl_ofi_cm_l_comm()
 	cm->get_l_comm_id_pool()->free_id(l_comm_id);
 }
 
+int nccl_ofi_cm_l_comm::process_conn_msg(const nccl_ofi_cm_conn_msg &conn_msg)
+{
+	auto r_comm = new nccl_ofi_cm_r_comm(cm, this, conn_msg);
+
+	int ret = cm->av_insert_address(conn_msg.conn_ep_name.name, &r_comm->dest_addr);
+	if (ret != 0) {
+		return ret;
+	}
+
+	nccl_ofi_cm_ep_rail_info sender_rails{ };
+	copy_conn_msg_to_ep_rail_info(conn_msg, sender_rails);
+
+	nccl_ofi_cm_ep_rail_info receiver_rails = cm->select_rails(sender_rails,
+								   &r_comm->rail_selector_output);
+	r_comm->set_ep_rail_info(receiver_rails);
+
+	return r_comm->send_conn_resp_msg();
+}
+
 
 nccl_ofi_cm_r_comm *nccl_ofi_cm_l_comm::accept()
 {
-	if (!pending_conn_msg.empty()) {
-		nccl_ofi_cm_conn_msg *conn_msg = &(*(pending_conn_msg.begin()));
-
-		nccl_ofi_cm_r_comm *r_comm = new nccl_ofi_cm_r_comm(cm, *conn_msg);
-
-		int ret = cm->av_insert_address(conn_msg->conn_ep_name.name, &r_comm->dest_addr);
-		if (ret != 0) {
-			throw std::runtime_error("Failed call to av_insert_address");
-		}
-
-		pending_conn_msg.pop_front();
-
-		return r_comm;
+	if (!pending_r_comm.empty()) {
+		nccl_ofi_cm_r_comm *cm_r_comm = pending_r_comm.front();
+		pending_r_comm.pop_front();
+		return cm_r_comm;
 	}
 
-	int ret = cm->post_pending_rx_buffers();
+	int ret = cm->process_pending_reqs();
 	if (ret != 0) {
 		throw std::runtime_error("Failed to post rx buffers");
 	}
@@ -82,21 +108,14 @@ nccl_ofi_cm_r_comm *nccl_ofi_cm_l_comm::accept()
 	return nullptr;
 }
 
-
-void nccl_ofi_cm_l_comm::insert_conn_msg(const nccl_ofi_cm_conn_msg &conn_msg)
-{
-	pending_conn_msg.emplace_back(conn_msg);
-}
-
-
 nccl_ofi_cm_r_comm::nccl_ofi_cm_r_comm(nccl_ofi_connection_manager *_cm,
+				       nccl_ofi_cm_l_comm *_cm_l_comm,
 				       const nccl_ofi_cm_conn_msg &_conn_msg) :
 	cm(_cm),
+	cm_l_comm(_cm_l_comm),
 	send_elem(nullptr),
 	conn_msg(_conn_msg),
 	send_conn_resp_req(this, cm->get_ep()),
-	conn_resp_msg_sent(false),
-	conn_resp_msg_delivered(false),
 	ep_rail_info()
 {
 	size_t sz_r_comm_id = cm->get_data_comm_id_pool()->allocate_id();
@@ -120,21 +139,6 @@ nccl_ofi_cm_r_comm::~nccl_ofi_cm_r_comm()
 	cm->get_data_comm_id_pool()->free_id(r_comm_id);
 }
 
-static inline void copy_conn_msg_to_ep_rail_info(const nccl_ofi_cm_conn_msg &conn_msg,
-						 nccl_ofi_cm_ep_rail_info &ret_rail_info)
-{
-	size_t num_ctrl_rails = conn_msg.num_control_rails;
-	ret_rail_info.control_ep_names.reserve(num_ctrl_rails);
-	for (size_t i = 0; i < num_ctrl_rails; ++i) {
-		ret_rail_info.control_ep_names.push_back(conn_msg.control_ep_names[i]);
-	}
-
-	size_t num_rails = conn_msg.num_rails;
-	ret_rail_info.ep_names.reserve(num_rails);
-	for (size_t i = 0; i < num_rails; ++i) {
-		ret_rail_info.ep_names.push_back(conn_msg.ep_names[i]);
-	}
-}
 
 nccl_ofi_cm_ep_rail_info nccl_ofi_cm_r_comm::get_sender_ep_rails()
 {
@@ -171,44 +175,26 @@ void nccl_ofi_cm_r_comm::prepare_conn_resp_msg()
 	send_conn_resp_req.set_send_elem(send_elem);
 }
 
-
-int nccl_ofi_cm_r_comm::test_ready(bool *ready)
+int nccl_ofi_cm_r_comm::send_conn_resp_msg()
 {
-	int ret = 0;
-
-	if (!ep_rail_info) {
-		NCCL_OFI_WARN("ep_rail_info not initialized -- call set_ep_rail_info first");
-		return -EINVAL;
-	}
-
-	if (!conn_resp_msg_sent) {
-		ret = send_conn_resp_req.post_send();
-		if (ret == 0) {
-			conn_resp_msg_sent = true;
-		} else if (ret != -FI_EAGAIN) {
-			return ret;
-		}
-	}
-
-	*ready = conn_resp_msg_delivered;
-
-	ret = cm->post_pending_rx_buffers();
-	if (ret != 0) {
+	int ret = send_conn_resp_req.progress();
+	if (ret == -FI_EAGAIN) {
+		cm->append_pending_req(&send_conn_resp_req);
+	} else if (ret != 0) {
 		return ret;
 	}
-
 	return 0;
 }
 
 
-void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_ofi_cm_handle *handle, nccl_ofi_cm_conn_msg *conn_msg)
+void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_net_ofi_conn_handle *handle, nccl_ofi_cm_conn_msg *conn_msg)
 {
 	conn_msg->type = nccl_ofi_cm_conn_msg::SEND_CONN_MSG;
 	conn_msg->num_rails = ep_rail_info.ep_names.size();
 	conn_msg->num_control_rails = ep_rail_info.control_ep_names.size();
 
 	conn_msg->local_comm_id = s_comm_id;
-	conn_msg->remote_comm_id = handle->l_comm_id;
+	conn_msg->remote_comm_id = handle->comm_id;
 
 	copy_rail_info_to_conn_msg(ep_rail_info, conn_msg);
 
@@ -218,7 +204,7 @@ void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_ofi_cm_handle *handle, nccl_ofi_c
 
 
 nccl_ofi_cm_s_comm::nccl_ofi_cm_s_comm(nccl_ofi_connection_manager *_cm,
-				       nccl_ofi_cm_handle *handle,
+				       nccl_net_ofi_conn_handle *handle,
 				       const nccl_ofi_cm_ep_rail_info &_ep_rail_info) :
 	cm(_cm),
 	send_elem(nullptr),
@@ -267,17 +253,18 @@ int nccl_ofi_cm_s_comm::test_ready(bool *ready)
 	*ready = false;
 
 	if (!conn_msg_sent) {
-		ret = send_conn_req.post_send();
-		if (ret == 0) {
-			conn_msg_sent = true;
-		} else if (ret != -FI_EAGAIN) {
+		ret = send_conn_req.progress();
+		if (ret == -FI_EAGAIN) {
+			cm->append_pending_req(&send_conn_req);
+		} else if (ret != 0) {
 			return ret;
 		}
+		conn_msg_sent = true;
 	}
 
 	*ready = (conn_msg_delivered && received_conn_resp_msg);
 
-	ret = cm->post_pending_rx_buffers();
+	ret = cm->process_pending_reqs();
 	if (ret != 0) {
 		return ret;
 	}

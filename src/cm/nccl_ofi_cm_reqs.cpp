@@ -20,6 +20,8 @@ static inline int cm_post_send(fid_ep *ep, nccl_ofi_freelist_elem_t *send_elem, 
 		NCCL_OFI_WARN("Error in call to fi_send. RC: %zd, Error: %s",
 				ret, fi_strerror(-ret));
 		return static_cast<int>(ret);
+	} else {
+		NCCL_OFI_INFO(NCCL_INIT, "Post send");
 	}
 
 	return static_cast<int>(ret);
@@ -94,7 +96,7 @@ nccl_ofi_cm_rx_req::~nccl_ofi_cm_rx_req()
 	cm->free_conn_msg(rx_elem);
 }
 
-int nccl_ofi_cm_rx_req::post_rx()
+int nccl_ofi_cm_rx_req::progress()
 {
 	nccl_ofi_cm_mr_handle *mr_handle = static_cast<nccl_ofi_cm_mr_handle *>(rx_elem->mr_handle);
 	void *desc = fi_mr_desc(mr_handle->mr);
@@ -111,7 +113,7 @@ int nccl_ofi_cm_rx_req::post_rx()
 }
 
 
-int nccl_ofi_cm_send_conn_req::post_send()
+int nccl_ofi_cm_send_conn_req::progress()
 {
 	return cm_post_send(ep, send_elem, cm_s_comm->dest_addr, this);
 }
@@ -122,7 +124,7 @@ int nccl_ofi_cm_send_conn_req::handle_completion()
 	return 0;
 }
 
-int nccl_ofi_cm_send_conn_resp_req::post_send()
+int nccl_ofi_cm_send_conn_resp_req::progress()
 {
 	return cm_post_send(ep, send_elem, cm_r_comm->dest_addr, this);
 }
@@ -137,6 +139,7 @@ int nccl_ofi_cm_send_conn_resp_req::handle_completion()
 
 int nccl_ofi_cm_rx_req::handle_completion()
 {
+	NCCL_OFI_INFO(NCCL_INIT, "Recv completion");
 	nccl_ofi_cm_conn_msg *conn_msg = static_cast<nccl_ofi_cm_conn_msg *>(rx_elem->ptr);
 	switch(conn_msg->type) {
 	case nccl_ofi_cm_conn_msg::SEND_CONN_MSG: {
@@ -149,7 +152,7 @@ int nccl_ofi_cm_rx_req::handle_completion()
 		}
 
 		/* TODO lock on something? */
-		l_comm->insert_conn_msg(*conn_msg);
+		l_comm->process_conn_msg(*conn_msg);
 		break;
 	}
 	case nccl_ofi_cm_conn_msg::SEND_CONN_RESP_MSG: {
@@ -169,5 +172,5 @@ int nccl_ofi_cm_rx_req::handle_completion()
 	}
 
 	/* Repost buffer */
-	return post_rx();
+	return this->progress();
 }

@@ -1997,13 +1997,9 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 					    nccl_net_ofi_sendrecv_ep_t *ep,
 					    nccl_net_ofi_sendrecv_send_comm_t **s_comm)
 {
-	char remote_ep_addr[MAX_EP_ADDR] = {};
-	uint64_t tag = 0ULL;
 	uint64_t max_tag = 0;
 	size_t req_size = sizeof(nccl_net_ofi_sendrecv_req_t);
-	fi_addr_t remote_addr;
 	nccl_net_ofi_sendrecv_send_comm_t *ret_s_comm = NULL;
-	nccl_ofi_connection_info_t *conn_info = NULL;
 	*s_comm = NULL;
 	int ret = 0;
 
@@ -2015,25 +2011,6 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 	}
 
 	max_tag = device->max_tag;
-
-	/* Get tag and remote name from handle */
-	memcpy(&remote_ep_addr, handle->ep_name, MAX_EP_ADDR);
-	memcpy(&tag, &handle->comm_id, sizeof(handle->comm_id));
-	if (tag < 1 || tag > max_tag) {
-		NCCL_OFI_WARN("Received an invalid tag %lu for device %d", tag,
-			      device->base.dev_id);
-		return -EINVAL;
-	}
-
-	/* Insert remote address into AV */
-	ret = fi_av_insert(ep->av,
-			   (void *)remote_ep_addr, 1,
-			   &remote_addr, 0, NULL);
-	if (OFI_UNLIKELY(ret != 1)) {
-		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %d",
-			      device->base.dev_id, ret);
-		return -EINVAL;
-	}
 
 	/* Allocate and initialize send_comm */
 	ret_s_comm = (nccl_net_ofi_sendrecv_send_comm_t *)
@@ -2052,36 +2029,11 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->base.close = sendrecv_send_comm_close;
 	ret_s_comm->base.write = NULL;
 	ret_s_comm->base.write_inline = NULL;
-	ret_s_comm->tag = tag;
+	ret_s_comm->tag = 0UL /* TODO */;
 	ret_s_comm->local_ep = ep->ofi_ep;
-	ret_s_comm->remote_ep = remote_addr;
+	ret_s_comm->remote_ep = 0UL;
 
-	ret_s_comm->conn_info = nccl_ofi_freelist_entry_alloc(ep->conn_msg_fl);
-	if (ret_s_comm->conn_info == NULL) {
-		NCCL_OFI_WARN("Could not allocate connect connection info");
-		ret = -ENOMEM;
-		goto out;
-	}
-	
-	conn_info = (nccl_ofi_connection_info_t *)ret_s_comm->conn_info->ptr;
-
-	conn_info->ep_namelen = sizeof(conn_info->ep_name);
-
-	ret = fi_getname(&(ep->ofi_ep->fid),
-			 (void *)conn_info->ep_name,
-			 &conn_info->ep_namelen);
-	if (ret == -FI_ETOOSMALL) {
-		NCCL_OFI_WARN("Endpoint's address length (%zu) is larger than supplied buffer length (%d)",
-			      conn_info->ep_namelen, MAX_EP_ADDR);
-		goto out;
-	} else if (ret != 0) {
-		NCCL_OFI_WARN("Call to fi_getname() failed with RC: %d, ERROR: %s",
-			      ret, fi_strerror(-ret));
-		goto out;
-	}
-
-	conn_info->connect_to_self =
-		(0 == memcmp(conn_info->ep_name, remote_ep_addr, conn_info->ep_namelen)) ? 1 : 0;
+	ret_s_comm->conn_info = nullptr;
 
 	/* Pre-allocated buffers for data path */
 	ret = nccl_ofi_freelist_init(req_size, 16, 16, NCCL_OFI_MAX_SEND_REQUESTS,
@@ -2181,7 +2133,6 @@ static int sendrecv_endpoint_connect(nccl_net_ofi_ep_t *base_ep,
 				     nccl_net_ofi_conn_handle_t *handle,
 				     nccl_net_ofi_send_comm_t **send_comm)
 {
-	assert(false);
 	int ret = 0;
 	ssize_t rc = 0;
 	*send_comm = NULL;
@@ -2199,7 +2150,6 @@ static int sendrecv_endpoint_connect(nccl_net_ofi_ep_t *base_ep,
 
 	/* Extract connection state of the communicator */
 	save_comm_state_t *comm_state = &(handle->state);
-	nccl_net_ofi_sendrecv_req_t *req = (nccl_net_ofi_sendrecv_req_t *)comm_state->req;
 	nccl_net_ofi_sendrecv_send_comm_t *s_comm =
 		(nccl_net_ofi_sendrecv_send_comm_t *)comm_state->comm;
 
@@ -2225,29 +2175,21 @@ static int sendrecv_endpoint_connect(nccl_net_ofi_ep_t *base_ep,
 			return ret;
 		}
 
-		/* Prepare connect request to be sent to peer */
-		req = sendrecv_send_comm_prepare_send_req(s_comm);
-		if (OFI_UNLIKELY(req == NULL)) {
-			free(s_comm);
-			return -ENOMEM;
-		}
+		nccl_ofi_cm_ep_rail_info rail_info;
+		cm_ep_name name = { };
+		ret = fi_getname(&(ep->ofi_ep->fid),
+				 (void *)name.name,
+				 &name.name_len);
+		rail_info.ep_names.push_back(name);
+		s_comm->cm_s_comm = ep->cm->connect(handle, rail_info);
 
 		comm_state->stage = COMM_SEND_CONN;
 
 		fallthrough;
 	case COMM_SEND_CONN:
 		/* Send "connect" message to remote EP */
-		rc = sendrecv_send_comm_send_connect_message(s_comm, device, ep, req);
-		if (rc == -FI_EAGAIN) {
-			/* Save connection state */
-			comm_state->comm = &s_comm->base.base;
-			comm_state->req = &req->base;
-			return 0;
-		}
-		else if (rc != 0) {
-			sendrecv_send_comm_free_req(s_comm, dev_id, req, false);
-			free(s_comm);
-			return rc;
+		while (true) {
+			
 		}
 
 		comm_state->stage = COMM_CONN_REQ_PENDING;

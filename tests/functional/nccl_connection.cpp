@@ -67,6 +67,9 @@ int main(int argc, char* argv[])
 	OFINCCLCHECKGOTO(extNet->devices(&ndev), res, exit);
 	NCCL_OFI_INFO(NCCL_INIT, "Received %d network devices", ndev);
 
+	/** Test **/
+	ndev = 1;
+
 	test_support_gdr = (int *)malloc(sizeof(int) * ndev);
 	if (test_support_gdr == NULL) {
 		NCCL_OFI_WARN("Failed to allocate memory");

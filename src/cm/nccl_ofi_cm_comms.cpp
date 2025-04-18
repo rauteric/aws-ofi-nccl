@@ -45,6 +45,7 @@ nccl_ofi_cm_l_comm::nccl_ofi_cm_l_comm(nccl_ofi_connection_manager *_cm) :
 
 	handle.l_comm_id = l_comm_id;
 	handle.s_comm = nullptr;
+	handle.r_comm = nullptr;
 }
 
 

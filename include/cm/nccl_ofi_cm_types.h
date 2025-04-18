@@ -69,8 +69,9 @@ struct nccl_ofi_cm_handle
 {
 	ep_name name;
 	uint32_t l_comm_id;
-	/* Save temporary communicator state when creating send communicator */
+	/* Save temporary communicator states when creating send/recv communicators */
 	nccl_ofi_cm_s_comm *s_comm;
+	nccl_ofi_cm_r_comm *r_comm;
 };
 
 #endif /* NCCL_OFI_CM_TYPES_H_ */

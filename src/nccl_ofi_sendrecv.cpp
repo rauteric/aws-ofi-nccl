@@ -581,6 +581,9 @@ static int sendrecv_recv_conn_post(nccl_net_ofi_sendrecv_listen_comm_t *l_comm,
 				   size_t size,
 				   nccl_net_ofi_sendrecv_req_t *req)
 {
+	abort();
+	return 0;
+	#if 0
 	ssize_t rc = 0;
 	int ret = 0;
 	int dev_id = l_comm->base.base.dev_id;
@@ -606,6 +609,7 @@ static int sendrecv_recv_conn_post(nccl_net_ofi_sendrecv_listen_comm_t *l_comm,
 			      dev_id, rc, fi_strerror(-rc));
 
 	return rc;
+	#endif
 }
 
 /*
@@ -1523,6 +1527,7 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 				       nccl_net_ofi_recv_comm_t **recv_comm)
 {
+	assert(false);
 	int ret = 0;
 
 	nccl_net_ofi_sendrecv_listen_comm_t *l_comm =
@@ -1691,6 +1696,7 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 static int sendrecv_listen_comm_close(nccl_net_ofi_listen_comm_t *listen_comm)
 {
+	abort(); /* TODO */
 	nccl_net_ofi_sendrecv_listen_comm_t *l_comm =
 		(nccl_net_ofi_sendrecv_listen_comm_t *)listen_comm;
 	int ret = 0;
@@ -1748,7 +1754,6 @@ static int sendrecv_endpoint_listen(nccl_net_ofi_ep_t *base_ep,
 	char *local_ep_name = NULL;
 	fi_addr_t local_ep_addr;
 	nccl_net_ofi_sendrecv_listen_comm_t *l_comm = NULL;
-	uint64_t tag;
 	int dev_id = 0;
 	int num_addrs;
 	nccl_net_ofi_sendrecv_ep_t *ep =
@@ -1763,27 +1768,10 @@ static int sendrecv_endpoint_listen(nccl_net_ofi_ep_t *base_ep,
 
 	dev_id = device->base.dev_id;
 
-	/* Zero-out the handle */
-	memset(handle, 0, sizeof(nccl_net_ofi_conn_handle_t));
-
-	/* Increase tag ID */
-	if (ep->tag + 1 >=
-	    device->max_tag) {
-		NCCL_OFI_WARN("Cannot open more connection for device ID %d."
-			      " Maximum is %ld",
-			      dev_id, device->max_tag);
-		return -ENOSPC;
-	}
-	tag = ++ep->tag;
-
-	/* Build handle */
 	local_ep_name = sendrecv_get_local_address(ep->ofi_ep);
 	if (local_ep_name == NULL) {
 		return -EINVAL;
 	}
-
-	memcpy(handle->ep_name, local_ep_name, MAX_EP_ADDR);
-	handle->comm_id = (uint32_t)tag;
 
 	/* Insert local EP address to AV. This will be used to issue local read operations */
 	num_addrs = fi_av_insert(ep->av, (void *)local_ep_name, 1,
@@ -1810,10 +1798,11 @@ static int sendrecv_endpoint_listen(nccl_net_ofi_ep_t *base_ep,
 	l_comm->base.base.dev_id = dev_id;
 	l_comm->base.accept = sendrecv_listen_comm_accept;
 	l_comm->base.close = sendrecv_listen_comm_close;
-	l_comm->tag = tag;
 	l_comm->local_ep = ep->ofi_ep;
 	l_comm->accepted = false;
 	l_comm->local_ep_addr = local_ep_addr;
+
+	l_comm->cm_l_comm = ep->cm->listen();
 
 	*listen_comm = (nccl_net_ofi_listen_comm_t *)l_comm;
 	return 0;
@@ -2191,6 +2180,7 @@ static int sendrecv_endpoint_connect(nccl_net_ofi_ep_t *base_ep,
 				     nccl_net_ofi_conn_handle_t *handle,
 				     nccl_net_ofi_send_comm_t **send_comm)
 {
+	assert(false);
 	int ret = 0;
 	ssize_t rc = 0;
 	*send_comm = NULL;
@@ -2335,6 +2325,8 @@ static int nccl_net_ofi_sendrecv_endpoint_free(nccl_net_ofi_ep_t *base_ep)
 		goto exit;
 	}
 
+	delete ep->cm;
+
 	ret = nccl_ofi_freelist_fini(ep->conn_msg_fl);
 	if (ret != 0) {
 		NCCL_OFI_WARN("nccl_ofi_freelist_fini failed: %d", ret);
@@ -2411,6 +2403,12 @@ static int nccl_net_ofi_sendrecv_domain_create_endpoint(nccl_net_ofi_domain_t *b
 	if (ret != 0) {
 		return ret;
 	}
+
+	/* TODO: max_tag is too big. Set lower for now. */
+	size_t num_comm_ids = 1024;
+
+	ep->cm = new nccl_ofi_connection_manager(device->info, ofi_domain, ep->cq, num_comm_ids,
+		domain->base.mr_rkey_pool);
 	
 	*base_ep = &ep->base;
 

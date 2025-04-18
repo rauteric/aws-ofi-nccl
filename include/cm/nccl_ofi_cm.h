@@ -34,6 +34,27 @@ public:
 };
 
 /**
+ * Select rails callback
+ *
+ * opaque_input: provides transport-chosen state to this function
+ *
+ * opaque_output: state returned by this function in addition to the rail
+ *                information, can be retrieved from cm_r_comm by transport
+ * 		  after connection is established.
+ *
+ * 		  For example, this might be a pointer to the transport
+ * 		  endpoint created by this function.
+ *
+ * TODO: The C++ way to do this, and avoid void ptr casting, is to make this
+ *       a template parameter. However, the way the CM code is currently
+ *       organized, this means making every other CM class a template class
+ *       as well, and generally makes the code messy. May revisit this in the
+ *       future
+ */
+typedef nccl_ofi_cm_ep_rail_info (*select_rails_fn)(const nccl_ofi_cm_ep_rail_info &sender_rails,
+						    void *opaque_input, void **opaque_output);
+
+/**
  * Connection manager. Top-level class that the caller can call connection
  * establishment functions, listen(), connect, accept(), to establish
  * send/recv communicators (TODO not really communicators, rename).
@@ -86,9 +107,19 @@ public:
 	 * @param rail_info: rail information (addresses of data-transfer endpoints to send
 	 * 		     to the remote node)
 	 */
-	nccl_ofi_cm_s_comm *connect(nccl_ofi_cm_handle *handle,
+	nccl_ofi_cm_s_comm *connect(nccl_net_ofi_conn_handle *handle,
 				    const nccl_ofi_cm_ep_rail_info &rail_info);
 
+
+	/**
+	 * Provide a "rail selector" used to choose rails to advertise
+	 * in the connect response message.
+	 */
+	void set_rail_selector(select_rails_fn fn, void *fn_input)
+	{
+		rail_selector = fn;
+		rail_selector_input = fn_input;
+	}
 	/* --------------------------------------------------------- */
 
 	/* TODO: the functions below are not intended to be used by the caller
@@ -129,7 +160,7 @@ public:
 	 *
 	 * TODO just make an accessor for fid_av* instead?
 	 */
-	int av_insert_address(ep_name address, fi_addr_t *fi_addr);
+	int av_insert_address(const ep_name address, fi_addr_t *fi_addr);
 
 	const cm_ep_name &get_conn_ep_name() {return conn_ep_name;}
 
@@ -144,12 +175,21 @@ public:
 
 	nccl_ofi_idpool_t *get_mr_key_pool() {return mr_key_pool;}
 
+	void append_pending_req(nccl_ofi_cm_req *req)
+	{
+		pending_reqs.push_back(req);
+	}
+
 	/**
-	 * Post any rx buffers that are pending due to EAGAIN. Used by cm_s_comm
-	 * and cm_r_comm to replenish the buffer pool while waiting for connect/
-	 * connect response messages
+	 * Post any reqs pending due to EAGAIN.
 	 */
-	int post_pending_rx_buffers();
+	int process_pending_reqs();
+
+	nccl_ofi_cm_ep_rail_info select_rails(const nccl_ofi_cm_ep_rail_info &sender_rails,
+					      void **opaque_output)
+	{
+		return rail_selector(sender_rails, rail_selector_input, opaque_output);
+	}
 private:
 	/* Input */
 	fid_domain *domain;
@@ -167,7 +207,7 @@ private:
 	std::vector<std::unique_ptr<nccl_ofi_cm_rx_req>> rx_req_list;
 
 	/* rx reqs that need to be posted (due to EAGAIN) */
-	std::deque<nccl_ofi_cm_rx_req *> pending_rx_reqs;
+	std::deque<nccl_ofi_cm_req *> pending_reqs;
 
 	nccl_ofi_idpool_t l_comm_id_pool;
 	nccl_ofi_idpool_t data_comm_id_pool;
@@ -176,6 +216,9 @@ private:
 	nccl_ofi_idpool_t *mr_key_pool;
 
 	cm_ep_name conn_ep_name;
+
+	select_rails_fn rail_selector = NULL;
+	void *rail_selector_input = NULL;
 
 	void set_conn_ep_name();
 

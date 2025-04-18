@@ -15,6 +15,7 @@
 class nccl_ofi_connection_manager;
 class nccl_ofi_cm_s_comm;
 class nccl_ofi_cm_r_comm;
+class nccl_ofi_cm_l_comm;
 
 /* Struct types */
 typedef char ep_name[MAX_EP_ADDR];
@@ -63,14 +64,6 @@ struct nccl_ofi_cm_ep_rail_info
 {
 	std::vector<cm_ep_name> control_ep_names;
 	std::vector<cm_ep_name> ep_names;
-};
-
-struct nccl_ofi_cm_handle
-{
-	ep_name name;
-	uint32_t l_comm_id;
-	/* Save temporary communicator state when creating send communicator */
-	nccl_ofi_cm_s_comm *s_comm;
 };
 
 #endif /* NCCL_OFI_CM_TYPES_H_ */

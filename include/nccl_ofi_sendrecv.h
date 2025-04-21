@@ -51,7 +51,7 @@ typedef struct nccl_net_ofi_sendrecv_listen_comm {
 	/* connecting peer information (nccl_ofi_connection_info_t) */
 	nccl_ofi_freelist_elem_t *conn_info;
 
-	nccl_ofi_cm_l_comm *cm_l_comm;
+	nccl_ofi_cm_listener *cm_l_comm;
 } nccl_net_ofi_sendrecv_listen_comm_t;
 
 typedef struct nccl_net_ofi_sendrecv_send_comm {
@@ -71,7 +71,7 @@ typedef struct nccl_net_ofi_sendrecv_send_comm {
 	/* connecting peer information (nccl_ofi_connection_info_t) */
 	nccl_ofi_freelist_elem_t *conn_info;
 
-	nccl_ofi_cm_s_comm *cm_s_comm;
+	nccl_ofi_cm_send_connector *cm_s_comm;
 } nccl_net_ofi_sendrecv_send_comm_t;
 
 /* Metadata about dummy flush buffer */

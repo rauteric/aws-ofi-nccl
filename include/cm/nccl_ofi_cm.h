@@ -95,7 +95,7 @@ public:
 	 * Return a communicator (TODO rename to handle or some such) that can
 	 * be used to accept incoming connections from connect()
 	 */
-	nccl_ofi_cm_l_comm *listen();
+	nccl_ofi_cm_listener *listen();
 
 	/**
 	 * Given a handle (produced by cm_l_comm on a remote node), establish
@@ -107,7 +107,7 @@ public:
 	 * @param rail_info: rail information (addresses of data-transfer endpoints to send
 	 * 		     to the remote node)
 	 */
-	nccl_ofi_cm_s_comm *connect(nccl_net_ofi_conn_handle *handle,
+	nccl_ofi_cm_send_connector *connect(nccl_net_ofi_conn_handle *handle,
 				    const nccl_ofi_cm_ep_rail_info &rail_info);
 
 
@@ -129,11 +129,11 @@ public:
 	/**
 	 * Map from comm id to l_comm. Used for receiving connect message
 	 */
-	nccl_ofi_cm_l_comm *get_l_comm(uint32_t l_comm_id);
+	nccl_ofi_cm_listener *get_l_comm(uint32_t l_comm_id);
 	/**
 	 * Map from comm id to s_comm. Used for receiving connect response message
 	 */
-	nccl_ofi_cm_s_comm *get_s_comm(uint32_t s_comm_id);
+	nccl_ofi_cm_send_connector *get_s_comm(uint32_t s_comm_id);
 
 	/**
 	 * Access functions for the conn_msg freelist (which takes care of memory
@@ -167,10 +167,10 @@ public:
 	nccl_ofi_idpool_t *get_l_comm_id_pool() { return &l_comm_id_pool; }
 	nccl_ofi_idpool_t *get_data_comm_id_pool() { return &data_comm_id_pool; }
 
-	std::unordered_map<uint32_t, nccl_ofi_cm_l_comm *> *get_l_comm_map()
+	std::unordered_map<uint32_t, nccl_ofi_cm_listener *> *get_l_comm_map()
 	{ return &l_comm_map; }
 
-	std::unordered_map<uint32_t, nccl_ofi_cm_s_comm *> *get_s_comm_map()
+	std::unordered_map<uint32_t, nccl_ofi_cm_send_connector *> *get_s_comm_map()
 	{ return &s_comm_map; }
 
 	nccl_ofi_idpool_t *get_mr_key_pool() {return mr_key_pool;}
@@ -197,8 +197,8 @@ private:
 	fid_ep *ep;
 	fid_av *av;
 
-	std::unordered_map<uint32_t, nccl_ofi_cm_l_comm *> l_comm_map;
-	std::unordered_map<uint32_t, nccl_ofi_cm_s_comm *> s_comm_map;
+	std::unordered_map<uint32_t, nccl_ofi_cm_listener *> l_comm_map;
+	std::unordered_map<uint32_t, nccl_ofi_cm_send_connector *> s_comm_map;
 
 	std::unique_ptr<nccl_ofi_freelist_t, freelist_deleter> conn_msg_fl;
 

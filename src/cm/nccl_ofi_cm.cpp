@@ -106,13 +106,13 @@ int nccl_ofi_connection_manager::process_pending_reqs()
 }
 
 
-nccl_ofi_cm_l_comm *nccl_ofi_connection_manager::listen()
+nccl_ofi_cm_listener *nccl_ofi_connection_manager::listen()
 {
-	return new nccl_ofi_cm_l_comm(this);
+	return new nccl_ofi_cm_listener(this);
 }
 
 
-nccl_ofi_cm_l_comm *nccl_ofi_connection_manager::get_l_comm(uint32_t l_comm_id)
+nccl_ofi_cm_listener *nccl_ofi_connection_manager::get_l_comm(uint32_t l_comm_id)
 {
 	auto it = l_comm_map.find(l_comm_id);
 	if (it != l_comm_map.end()) {
@@ -123,7 +123,7 @@ nccl_ofi_cm_l_comm *nccl_ofi_connection_manager::get_l_comm(uint32_t l_comm_id)
 }
 
 
-nccl_ofi_cm_s_comm *nccl_ofi_connection_manager::get_s_comm(uint32_t s_comm_id)
+nccl_ofi_cm_send_connector *nccl_ofi_connection_manager::get_s_comm(uint32_t s_comm_id)
 {
 	auto it = s_comm_map.find(s_comm_id);
 	if (it != s_comm_map.end()) {
@@ -145,10 +145,10 @@ int nccl_ofi_connection_manager::av_insert_address(const ep_name address, fi_add
 }
 
 
-nccl_ofi_cm_s_comm *nccl_ofi_connection_manager::connect(nccl_net_ofi_conn_handle *handle,
+nccl_ofi_cm_send_connector *nccl_ofi_connection_manager::connect(nccl_net_ofi_conn_handle *handle,
 							 const nccl_ofi_cm_ep_rail_info &rail_info)
 {
-	nccl_ofi_cm_s_comm *s_comm = new nccl_ofi_cm_s_comm(this, handle, rail_info);
+	nccl_ofi_cm_send_connector *s_comm = new nccl_ofi_cm_send_connector(this, handle, rail_info);
 
 	int ret = this->av_insert_address(handle->ep_name, &s_comm->dest_addr);
 	if (ret != 0) {

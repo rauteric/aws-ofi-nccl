@@ -1349,7 +1349,7 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 								     nccl_net_ofi_sendrecv_device_t *device,
 								     nccl_net_ofi_sendrecv_domain_t *domain,
 								     nccl_net_ofi_sendrecv_ep_t *ep,
-								     nccl_ofi_cm_r_comm *cm_r_comm,
+								     nccl_ofi_cm_receiver_info *cm_r_comm,
 								     char *remote_ep_addr)
 {
 	int ret = 0;
@@ -1433,7 +1433,7 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	nccl_net_ofi_sendrecv_listen_comm_t *l_comm =
 		(nccl_net_ofi_sendrecv_listen_comm_t *)listen_comm;
 
-	nccl_ofi_cm_r_comm *cm_r_comm = nullptr;
+	nccl_ofi_cm_receiver_info *cm_r_comm = nullptr;
 
 	if (l_comm->state.stage != COMM_CONN_REQ_PENDING && l_comm->accepted) {
 		NCCL_OFI_WARN("listen_comm %p object already has an active connection (%d).",

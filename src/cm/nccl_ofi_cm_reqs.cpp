@@ -31,7 +31,7 @@ static inline int cm_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 					 struct fi_cq_entry *cq_entry_base,
 					 uint16_t rail_id)
 {
-	nccl_ofi_cm_req *req = container_of(ctx, nccl_ofi_cm_req, ctx);
+	nccl_ofi_cm_req *req = cpp_container_of(ctx, &nccl_ofi_cm_req::ctx);
 
 	return req->handle_completion();
 }
@@ -55,7 +55,7 @@ static inline int cm_req_handle_error_entry(nccl_net_ofi_context_t *ctx,
 	}
 
 	assert(ctx);
-	nccl_ofi_cm_req *req = container_of(ctx, nccl_ofi_cm_req, ctx);
+	nccl_ofi_cm_req *req = cpp_container_of(ctx, &nccl_ofi_cm_req::ctx);
 
 	NCCL_OFI_WARN("Request %p completed with error. RC: %d. Error: %d (%s). Completed length: %ld",
 		req, err_entry->err,
@@ -144,7 +144,7 @@ int nccl_ofi_cm_rx_req::handle_completion()
 	switch(conn_msg->type) {
 	case nccl_ofi_cm_conn_msg::SEND_CONN_MSG: {
 
-		nccl_ofi_cm_l_comm *l_comm = cm->get_l_comm(conn_msg->remote_comm_id);
+		nccl_ofi_cm_listener *l_comm = cm->get_l_comm(conn_msg->remote_comm_id);
 		if (l_comm == nullptr) {
 			NCCL_OFI_WARN("Received conn_msg for invalid l_comm %u",
 				      conn_msg->remote_comm_id);
@@ -157,7 +157,7 @@ int nccl_ofi_cm_rx_req::handle_completion()
 	}
 	case nccl_ofi_cm_conn_msg::SEND_CONN_RESP_MSG: {
 
-		nccl_ofi_cm_s_comm *s_comm = cm->get_s_comm(conn_msg->remote_comm_id);
+		nccl_ofi_cm_send_connector *s_comm = cm->get_s_comm(conn_msg->remote_comm_id);
 		if (s_comm == nullptr) {
 			NCCL_OFI_WARN("Received conn_msg for invalid l_comm %u",
 				      conn_msg->remote_comm_id);

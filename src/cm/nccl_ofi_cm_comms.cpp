@@ -42,7 +42,7 @@ static inline void copy_conn_msg_to_ep_rail_info(const nccl_ofi_cm_conn_msg &con
 }
 
 
-nccl_ofi_cm_l_comm::nccl_ofi_cm_l_comm(nccl_ofi_connection_manager *_cm) :
+nccl_ofi_cm_listener::nccl_ofi_cm_listener(nccl_ofi_connection_manager *_cm) :
 	cm(_cm)
 {
 	size_t sz_l_comm_id = cm->get_l_comm_id_pool()->allocate_id();
@@ -64,16 +64,16 @@ nccl_ofi_cm_l_comm::nccl_ofi_cm_l_comm(nccl_ofi_connection_manager *_cm) :
 }
 
 
-nccl_ofi_cm_l_comm::~nccl_ofi_cm_l_comm()
+nccl_ofi_cm_listener::~nccl_ofi_cm_listener()
 {
 	cm->get_l_comm_map()->erase(l_comm_id);
 
 	cm->get_l_comm_id_pool()->free_id(l_comm_id);
 }
 
-int nccl_ofi_cm_l_comm::process_conn_msg(const nccl_ofi_cm_conn_msg &conn_msg)
+int nccl_ofi_cm_listener::process_conn_msg(const nccl_ofi_cm_conn_msg &conn_msg)
 {
-	auto r_comm = new nccl_ofi_cm_r_comm(cm, this, conn_msg);
+	auto r_comm = new nccl_ofi_cm_receiver_info(cm, this, conn_msg);
 
 	int ret = cm->av_insert_address(conn_msg.conn_ep_name.name, &r_comm->dest_addr);
 	if (ret != 0) {
@@ -91,10 +91,10 @@ int nccl_ofi_cm_l_comm::process_conn_msg(const nccl_ofi_cm_conn_msg &conn_msg)
 }
 
 
-nccl_ofi_cm_r_comm *nccl_ofi_cm_l_comm::accept()
+nccl_ofi_cm_receiver_info *nccl_ofi_cm_listener::accept()
 {
 	if (!pending_r_comm.empty()) {
-		nccl_ofi_cm_r_comm *cm_r_comm = pending_r_comm.front();
+		nccl_ofi_cm_receiver_info *cm_r_comm = pending_r_comm.front();
 		pending_r_comm.pop_front();
 		return cm_r_comm;
 	}
@@ -108,8 +108,8 @@ nccl_ofi_cm_r_comm *nccl_ofi_cm_l_comm::accept()
 	return nullptr;
 }
 
-nccl_ofi_cm_r_comm::nccl_ofi_cm_r_comm(nccl_ofi_connection_manager *_cm,
-				       nccl_ofi_cm_l_comm *_cm_l_comm,
+nccl_ofi_cm_receiver_info::nccl_ofi_cm_receiver_info(nccl_ofi_connection_manager *_cm,
+				       nccl_ofi_cm_listener *_cm_l_comm,
 				       const nccl_ofi_cm_conn_msg &_conn_msg) :
 	cm(_cm),
 	cm_l_comm(_cm_l_comm),
@@ -132,7 +132,7 @@ nccl_ofi_cm_r_comm::nccl_ofi_cm_r_comm(nccl_ofi_connection_manager *_cm,
 }
 
 
-nccl_ofi_cm_r_comm::~nccl_ofi_cm_r_comm()
+nccl_ofi_cm_receiver_info::~nccl_ofi_cm_receiver_info()
 {
 	cm->free_conn_msg(send_elem);
 
@@ -140,7 +140,7 @@ nccl_ofi_cm_r_comm::~nccl_ofi_cm_r_comm()
 }
 
 
-nccl_ofi_cm_ep_rail_info nccl_ofi_cm_r_comm::get_sender_ep_rails()
+nccl_ofi_cm_ep_rail_info nccl_ofi_cm_receiver_info::get_sender_ep_rails()
 {
 	nccl_ofi_cm_ep_rail_info ret_rail_info;
 
@@ -149,7 +149,7 @@ nccl_ofi_cm_ep_rail_info nccl_ofi_cm_r_comm::get_sender_ep_rails()
 	return ret_rail_info;
 }
 
-void nccl_ofi_cm_r_comm::prepare_conn_resp_msg()
+void nccl_ofi_cm_receiver_info::prepare_conn_resp_msg()
 {
 	assert(ep_rail_info);
 
@@ -175,7 +175,7 @@ void nccl_ofi_cm_r_comm::prepare_conn_resp_msg()
 	send_conn_resp_req.set_send_elem(send_elem);
 }
 
-int nccl_ofi_cm_r_comm::send_conn_resp_msg()
+int nccl_ofi_cm_receiver_info::send_conn_resp_msg()
 {
 	int ret = send_conn_resp_req.progress();
 	if (ret == -FI_EAGAIN) {
@@ -187,7 +187,7 @@ int nccl_ofi_cm_r_comm::send_conn_resp_msg()
 }
 
 
-void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_net_ofi_conn_handle *handle, nccl_ofi_cm_conn_msg *conn_msg)
+void nccl_ofi_cm_send_connector::prepare_conn_msg(nccl_net_ofi_conn_handle *handle, nccl_ofi_cm_conn_msg *conn_msg)
 {
 	conn_msg->type = nccl_ofi_cm_conn_msg::SEND_CONN_MSG;
 	conn_msg->num_rails = ep_rail_info.ep_names.size();
@@ -203,7 +203,7 @@ void nccl_ofi_cm_s_comm::prepare_conn_msg(nccl_net_ofi_conn_handle *handle, nccl
 }
 
 
-nccl_ofi_cm_s_comm::nccl_ofi_cm_s_comm(nccl_ofi_connection_manager *_cm,
+nccl_ofi_cm_send_connector::nccl_ofi_cm_send_connector(nccl_ofi_connection_manager *_cm,
 				       nccl_net_ofi_conn_handle *handle,
 				       const nccl_ofi_cm_ep_rail_info &_ep_rail_info) :
 	cm(_cm),
@@ -236,7 +236,7 @@ nccl_ofi_cm_s_comm::nccl_ofi_cm_s_comm(nccl_ofi_connection_manager *_cm,
 }
 
 
-nccl_ofi_cm_s_comm::~nccl_ofi_cm_s_comm()
+nccl_ofi_cm_send_connector::~nccl_ofi_cm_send_connector()
 {
 	cm->free_conn_msg(send_elem);
 
@@ -246,7 +246,7 @@ nccl_ofi_cm_s_comm::~nccl_ofi_cm_s_comm()
 }
 
 
-int nccl_ofi_cm_s_comm::test_ready(bool *ready)
+int nccl_ofi_cm_send_connector::test_ready(bool *ready)
 {
 	int ret = 0;
 
@@ -273,7 +273,7 @@ int nccl_ofi_cm_s_comm::test_ready(bool *ready)
 }
 
 
-nccl_ofi_cm_ep_rail_info nccl_ofi_cm_s_comm::get_receiver_ep_rails()
+nccl_ofi_cm_ep_rail_info nccl_ofi_cm_send_connector::get_receiver_ep_rails()
 {
 	nccl_ofi_cm_ep_rail_info ret_rail_info;
 

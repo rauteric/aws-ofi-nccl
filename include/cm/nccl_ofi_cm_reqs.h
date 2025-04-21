@@ -68,14 +68,14 @@ public:
 	virtual int handle_completion();
 	virtual int progress();
 
-	nccl_ofi_cm_send_conn_req(nccl_ofi_cm_s_comm *_cm_s_comm, fid_ep *_ep) :
+	nccl_ofi_cm_send_conn_req(nccl_ofi_cm_send_connector *_cm_s_comm, fid_ep *_ep) :
 		cm_s_comm(_cm_s_comm),
 		send_elem(nullptr),
 		ep(_ep) { }
 
 	void set_send_elem(nccl_ofi_freelist_elem_t *_send_elem) { this->send_elem = _send_elem; }
 private:
-	nccl_ofi_cm_s_comm *cm_s_comm;
+	nccl_ofi_cm_send_connector *cm_s_comm;
 	nccl_ofi_freelist_elem_t *send_elem;
 	fid_ep *ep;
 };
@@ -89,14 +89,14 @@ public:
 	virtual int handle_completion();
 	virtual int progress();
 
-	nccl_ofi_cm_send_conn_resp_req(nccl_ofi_cm_r_comm *_cm_r_comm, fid_ep *_ep) :
+	nccl_ofi_cm_send_conn_resp_req(nccl_ofi_cm_receiver_info *_cm_r_comm, fid_ep *_ep) :
 		cm_r_comm(_cm_r_comm),
 		send_elem(nullptr),
 		ep(_ep) { }
 
 	void set_send_elem(nccl_ofi_freelist_elem_t *_send_elem) { this->send_elem = _send_elem; }
 private:
-	nccl_ofi_cm_r_comm *cm_r_comm;
+	nccl_ofi_cm_receiver_info *cm_r_comm;
 	nccl_ofi_freelist_elem_t *send_elem;
 	fid_ep *ep;
 };

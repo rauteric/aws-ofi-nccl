@@ -13,9 +13,9 @@
 
 /* Forward class declarations */
 class nccl_ofi_connection_manager;
-class nccl_ofi_cm_s_comm;
-class nccl_ofi_cm_r_comm;
-class nccl_ofi_cm_l_comm;
+class nccl_ofi_cm_send_connector;
+class nccl_ofi_cm_receiver_info;
+class nccl_ofi_cm_listener;
 
 /* Struct types */
 typedef char ep_name[MAX_EP_ADDR];

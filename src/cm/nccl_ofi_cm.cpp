@@ -12,14 +12,18 @@
 #include "cm/nccl_ofi_cm.h"
 #include "cm/nccl_ofi_cm_mr.h"
 
-nccl_ofi_connection_manager::nccl_ofi_connection_manager(fi_info *info, fid_domain *_domain,
-							 fid_cq *cq, size_t num_comm_ids,
-							 nccl_ofi_idpool_t *_mr_key_pool)
-							 : domain(_domain), conn_msg_fl(),
-							   rx_req_list(), pending_reqs(),
-							   l_comm_id_pool(num_comm_ids),
-							   data_comm_id_pool(num_comm_ids),
-							   mr_key_pool(_mr_key_pool)
+nccl_ofi_connection_manager::nccl_ofi_connection_manager
+	(fi_info *info, fid_domain *_domain, fid_cq *cq, size_t num_comm_ids,
+	 nccl_ofi_idpool_t *_mr_key_pool, size_t user_conn_msg_size,
+	 transport_select_conn_resp_fn _transport_select_conn_resp_callback,
+	 void *_transport_select_conn_resp_input)
+
+	: domain(_domain), conn_msg_fl(), rx_req_list(), pending_reqs(),
+	l_comm_id_pool(num_comm_ids), data_comm_id_pool(num_comm_ids),
+	mr_key_pool(_mr_key_pool),
+	conn_msg_size(sizeof(nccl_ofi_cm_conn_msg) + user_conn_msg_size),
+	transport_select_conn_resp_callback(_transport_select_conn_resp_callback),
+	transport_select_conn_resp_input(_transport_select_conn_resp_input)
 {
 	int ret = nccl_ofi_ofiutils_init_connection(info, domain, &ep, &av, &cq);
 	if (ret != 0) {

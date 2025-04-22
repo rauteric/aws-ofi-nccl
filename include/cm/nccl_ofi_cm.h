@@ -34,13 +34,13 @@ public:
 };
 
 /**
- * Select rails callback
+ * Callback for transport to populate the connect response message
  *
  * opaque_input: provides transport-chosen state to this function
  *
- * opaque_output: state returned by this function in addition to the rail
- *                information, can be retrieved from cm_r_comm by transport
- * 		  after connection is established.
+ * opaque_output: state returned by this function that will be available
+ * 		  in the receiver_info object once the connection is
+ * 		  established
  *
  * 		  For example, this might be a pointer to the transport
  * 		  endpoint created by this function.
@@ -51,8 +51,10 @@ public:
  *       as well, and generally makes the code messy. May revisit this in the
  *       future
  */
-typedef nccl_ofi_cm_ep_rail_info (*select_rails_fn)(const nccl_ofi_cm_ep_rail_info &sender_rails,
-						    void *opaque_input, void **opaque_output);
+typedef void (*transport_select_conn_resp_fn)(const void *transport_connect_msg,
+					      void *opaque_input,
+					      void *transport_connect_resp_msg,
+					      void **opaque_output);
 
 /**
  * Connection manager. Top-level class that the caller can call connection
@@ -73,14 +75,23 @@ public:
 	 * Initializes the CM system state. Creates an endpoint and posts
 	 * initial buffer pool
 	 *
+	 * @param info, domain: Libfabric info and domain objects against
+	 * 			which the CM endpoint will be created
+	 *
 	 * @param cq: the completion queue to bind the new endpoint to.
 	 *            Ops submitted through the CM code will have a context
 	 *            pointer to nccl_net_ofi_context_t, with appropriate
 	 *            completion handling functions
+	 *
+	 * @param user_conn_msg_size: size of transport-specific part of
+	 * 			      connect and connect response messages
 	 */
 	nccl_ofi_connection_manager(fi_info *info, fid_domain *_domain,
 				    fid_cq *cq, size_t num_comm_ids,
-				    nccl_ofi_idpool_t *_mr_key_pool);
+				    nccl_ofi_idpool_t *mr_key_pool,
+				    size_t user_conn_msg_size,
+				    transport_select_conn_resp_fn transport_select_conn_resp_callback,
+				    void *transport_select_conn_resp_input);
 
 	/**
 	 * Destructor. Finalizes CM endpoint and other state.
@@ -108,18 +119,9 @@ public:
 	 * 		     to the remote node)
 	 */
 	nccl_ofi_cm_send_connector *connect(nccl_net_ofi_conn_handle *handle,
-				    const nccl_ofi_cm_ep_rail_info &rail_info);
+					    const void *transport_connect_msg);
 
 
-	/**
-	 * Provide a "rail selector" used to choose rails to advertise
-	 * in the connect response message.
-	 */
-	void set_rail_selector(select_rails_fn fn, void *fn_input)
-	{
-		rail_selector = fn;
-		rail_selector_input = fn_input;
-	}
 	/* --------------------------------------------------------- */
 
 	/* TODO: the functions below are not intended to be used by the caller
@@ -185,10 +187,13 @@ public:
 	 */
 	int process_pending_reqs();
 
-	nccl_ofi_cm_ep_rail_info select_rails(const nccl_ofi_cm_ep_rail_info &sender_rails,
-					      void **opaque_output)
+	void transport_select_conn_resp(const void *transport_connect_msg,
+					void *transport_connect_resp_msg,
+					void **opaque_output)
 	{
-		return rail_selector(sender_rails, rail_selector_input, opaque_output);
+		return transport_select_conn_resp_callback
+			(transport_connect_msg, transport_select_conn_resp_input,
+			 transport_connect_resp_msg, opaque_output);
 	}
 private:
 	/* Input */
@@ -217,8 +222,10 @@ private:
 
 	cm_ep_name conn_ep_name;
 
-	select_rails_fn rail_selector = NULL;
-	void *rail_selector_input = NULL;
+	transport_select_conn_resp_fn transport_select_conn_resp_callback;
+	void *transport_select_conn_resp_input;
+
+	size_t conn_msg_size;
 
 	void set_conn_ep_name();
 

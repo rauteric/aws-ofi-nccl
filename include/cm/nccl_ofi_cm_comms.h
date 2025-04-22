@@ -64,8 +64,6 @@ private:
  * used by the transport to create a recv communicator. This is the object
  * returned by cm_listener->accept() when a corresponding connection is
  * established.
- *
- * TODO needs a better name
  */
 class nccl_ofi_cm_receiver_info
 {

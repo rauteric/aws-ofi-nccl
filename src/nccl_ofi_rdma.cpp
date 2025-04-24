@@ -2568,29 +2568,17 @@ exit:
  */
 static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 					 nccl_net_ofi_rdma_ep_t *ep, int dev_id,
-					 nccl_ofi_rdma_ep_name_t *remote_ep_names,
+					 const nccl_ofi_rdma_ep_name_t *remote_ep_names,
 					 int num_remote_rails,
-					 nccl_ofi_rdma_ep_name_t *remote_control_ep_names,
+					 const nccl_ofi_rdma_ep_name_t *remote_control_ep_names,
 					 int num_remote_control_rails)
 {
 	int ret = 0;
 	nccl_net_ofi_rdma_send_comm_rail_t *comm_rail;
 	nccl_net_ofi_ep_rail_t *ep_rail;
-	nccl_ofi_rdma_ep_name_t *remote_rdma_ep_name;
+	const nccl_ofi_rdma_ep_name_t *remote_rdma_ep_name;
 
-	/**
-	 * In ENDPOINT_PER_COMM config, the ep address in the handle is not
-	 * necessarily the same as the one in the connect response message. So,
-	 * make sure we re-initialize the first rail upon receiving the response msg.
-	 *
-	 * TODO: revisit after merging the control channel qp patch (with which this)
-	 * is no longer an issue
-	 */
-	if (ofi_nccl_endpoint_per_communicator() != 0) {
-		s_comm->num_init_control_rails = 0;
-	}
-
-	for (uint16_t rail_id = s_comm->num_init_control_rails; rail_id < s_comm->num_control_rails; ++rail_id) {
+	for (uint16_t rail_id = 0; rail_id < s_comm->num_control_rails; ++rail_id) {
 		comm_rail = &s_comm->control_rails[rail_id];
 		ep_rail = &ep->control_rails[rail_id];
 		remote_rdma_ep_name = &remote_control_ep_names[rail_id];
@@ -2606,7 +2594,6 @@ static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 				      dev_id, fi_strerror(-ret));
 			return -EINVAL;
 		}
-		++(s_comm->num_init_control_rails);
 	}
 
 	for (uint16_t rail_id = 0; rail_id < s_comm->num_rails; ++rail_id) {
@@ -2649,17 +2636,11 @@ static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm)
 {
 	int ret = 0;
-	nccl_ofi_rdma_connection_info_t *conn_resp = (nccl_ofi_rdma_connection_info_t *)s_comm->conn_msg->ptr;
-	int dev_id = -1;
+	auto conn_resp = static_cast<const nccl_ofi_rdma_connection_info_t *>
+		(s_comm->connector->get_conn_resp_msg());
+
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
 	nccl_net_ofi_rdma_device_t *device = NULL;
-
-	assert(s_comm->conn_resp_req);
-	if (s_comm->conn_resp_req->state != NCCL_OFI_RDMA_REQ_COMPLETED) {
-		NCCL_OFI_WARN("Invalid connect response request state. Got %i but expected %i",
-			      s_comm->conn_resp_req->state, NCCL_OFI_RDMA_REQ_COMPLETED);
-		return -EINVAL;
-	}
 
 	/* Validate endpoint */
 	ep = (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
@@ -2674,7 +2655,7 @@ static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm)
 		NCCL_OFI_WARN("Invalid device provided");
 		return -EINVAL;
 	}
-	dev_id = device->base.dev_id;
+	int dev_id = device->base.dev_id;
 
 	if (conn_resp->num_rails != ep->num_rails) {
 		NCCL_OFI_WARN("Unexpected number of remote rails for dev %d. Expected %i but got %i",
@@ -2691,14 +2672,14 @@ static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm)
 	}
 
 	/* Validate received comm ID */
-	if (OFI_UNLIKELY(conn_resp->local_comm_id >= device->num_comm_ids)) {
-		NCCL_OFI_WARN("Received an invalid communicator ID %u for device %d", conn_resp->local_comm_id,
+	if (OFI_UNLIKELY(conn_resp->comm_id >= device->num_comm_ids)) {
+		NCCL_OFI_WARN("Received an invalid communicator ID %u for device %d", conn_resp->comm_id,
 						dev_id);
 		return -EINVAL;
 	}
 
 	/* Set remote comm ID to remote recv comm ID */
-	s_comm->remote_comm_id = conn_resp->local_comm_id;
+	s_comm->remote_comm_id = conn_resp->comm_id;
 
 	/* Initialize rails `1...num_rails-1' */
 	ret = init_send_comm_rails(s_comm, ep, dev_id,
@@ -2709,12 +2690,6 @@ static int finish_connect(nccl_net_ofi_rdma_send_comm_t *s_comm)
 	if (ret != 0) {
 		return ret;
 	}
-
-	s_comm->conn_resp_req->free(s_comm->conn_resp_req, false);
-	s_comm->conn_resp_req = NULL;
-
-	nccl_ofi_freelist_entry_free(ep->conn_msg_fl, s_comm->conn_msg);
-	s_comm->conn_msg = NULL;
 
 	return ret;
 }
@@ -2801,27 +2776,6 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 
  exit:
 	return ret;
-}
-
-/*
- * @brief	Reset send connect request of listen communicator
- *		by recv connect responce request
- *
- * @param	l_comm
- *		Valid listen communicator that stores a request of type
- *		`NCCL_OFI_RDMA_SEND_CONN_RESP'
- */
-static void prepare_send_conn_resp_req(nccl_net_ofi_rdma_listen_comm_t *l_comm)
-{
-	nccl_net_ofi_rdma_req_t *req = &l_comm->req;
-	assert(req->type == NCCL_OFI_RDMA_RECV_CONN);
-
-	req->type = NCCL_OFI_RDMA_SEND_CONN_RESP;
-	req->free = free_invalid;
-	req->size = 0;
-	req->ncompls = 0;
-
-	req->state = NCCL_OFI_RDMA_REQ_CREATED;
 }
 
 
@@ -3836,6 +3790,11 @@ static int recv_comm_destroy(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 	device = rdma_endpoint_get_device(ep);
 	assert(device != NULL);
 
+	if (r_comm->receiver != nullptr) {
+		delete r_comm->receiver;
+		r_comm->receiver = nullptr;
+	}
+
 	if (r_comm->send_close_req != NULL) {
 		ret = r_comm->send_close_req->free(r_comm->send_close_req, false);
 		if (ret != 0) {
@@ -4020,10 +3979,9 @@ static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
 {
 	int ret = 0;
 
-	/* Release connect response request if available */
-	if (s_comm->conn_resp_req) {
-		nccl_net_ofi_rdma_req_t *req = s_comm->conn_resp_req;
-		req->free(req, false);
+	if (s_comm->connector != nullptr) {
+		delete s_comm->connector;
+		s_comm->connector = nullptr;
 	}
 
 	/* Release request freelist */
@@ -4545,7 +4503,7 @@ static void rdma_fl_req_entry_fini(void *entry)
  */
 static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain_t *domain,
 							nccl_net_ofi_rdma_ep_t *l_comm_ep,
-							nccl_ofi_rdma_connection_info_t *conn_msg)
+							const nccl_ofi_rdma_connection_info_t *conn_msg)
 {
 	int ret = 0;
 
@@ -4604,19 +4562,19 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 	r_comm->local_comm_id = (uint32_t)comm_id;
 
 	/* Validate received comm ID */
-	if (OFI_UNLIKELY(conn_msg->local_comm_id >= device->num_comm_ids)) {
+	if (OFI_UNLIKELY(conn_msg->comm_id >= device->num_comm_ids)) {
 		NCCL_OFI_WARN("Received an invalid communicator ID %" PRIu32 " for device %d",
-			      conn_msg->local_comm_id, dev_id);
+			      conn_msg->comm_id, dev_id);
 		goto error;
 	}
 
-	r_comm->remote_comm_id = conn_msg->local_comm_id;
+	r_comm->remote_comm_id = conn_msg->comm_id;
 	r_comm->next_msg_seq_num = 0;
 
 	/* Find a comm to use, given the remote EP name */
 	if (ofi_nccl_endpoint_per_communicator() != 0)
 	{
-		nccl_ofi_rdma_ep_name_t *remote_rail0_ep_name = &conn_msg->ep_names[0];
+		const nccl_ofi_rdma_ep_name_t *remote_rail0_ep_name = &conn_msg->ep_names[0];
 		nccl_net_ofi_ep_t *ep_for_addr = NULL;
 		ret = domain->ep_addr_list->get(remote_rail0_ep_name->ep_name,
 						remote_rail0_ep_name->ep_name_len, &ep_for_addr);
@@ -4662,7 +4620,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 	for (uint16_t rail_id = 0; rail_id != num_control_rails; ++rail_id) {
 		nccl_net_ofi_rdma_recv_comm_rail_t *comm_rail = rdma_recv_comm_get_control_rail(r_comm, rail_id);
 		nccl_net_ofi_ep_rail_t *rail = rdma_endpoint_get_control_rail(ep, rail_id);
-		nccl_ofi_rdma_ep_name_t *remote_ep_name = &conn_msg->control_ep_names[rail_id];
+		const nccl_ofi_rdma_ep_name_t *remote_ep_name = &conn_msg->control_ep_names[rail_id];
 
 		comm_rail->local_ep = rail->ofi_ep;
 
@@ -4693,7 +4651,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 	for (uint16_t rail_id = 0; rail_id != num_rails; ++rail_id) {
 		nccl_net_ofi_rdma_recv_comm_rail_t *comm_rail = rdma_recv_comm_get_rail(r_comm, rail_id);
 		nccl_net_ofi_ep_rail_t *rail = rdma_endpoint_get_rail(ep, rail_id);
-		nccl_ofi_rdma_ep_name_t *remote_ep_name = &conn_msg->ep_names[rail_id];
+		const nccl_ofi_rdma_ep_name_t *remote_ep_name = &conn_msg->ep_names[rail_id];
 
 		comm_rail->local_ep = rail->ofi_ep;
 
@@ -4728,14 +4686,6 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 		NCCL_OFI_WARN("Could not allocate NCCL OFI requests free list for dev %d",
 				  dev_id);
 		goto error;
-	}
-
-	/* Allocate connect message, will be returned after the
-	   connect response send completion */
-	r_comm->conn_msg = nccl_ofi_freelist_entry_alloc(ep->conn_msg_fl);
-	if (r_comm->conn_msg == NULL) {
-		NCCL_OFI_WARN("Failed to allocate conn_msg buffer");
-		return NULL;
 	}
 
 	/* Allocate message buffer */
@@ -4794,31 +4744,23 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
  * @param	dev_id
  *		Device ID
  *
- * @return	Connect response message, on success
- *		NULL, on others
- * @return	0, on success
- *		-EiNVAL, on others
+ * @return	Connect response message
  */
-static int prepare_conn_resp(nccl_net_ofi_rdma_ep_t *ep,
-			     nccl_net_ofi_rdma_recv_comm_t *r_comm,
-				      int dev_id)
+static void prepare_conn_resp(nccl_net_ofi_rdma_ep_t *ep,
+			      nccl_net_ofi_rdma_recv_comm_t *r_comm,
+			      int dev_id,
+			      nccl_ofi_rdma_connection_info_t *conn_resp)
 {
 	int num_rails = ep->num_rails;
 	int num_control_rails = ep->num_control_rails;
-	nccl_ofi_rdma_connection_info_t *conn_resp = (nccl_ofi_rdma_connection_info_t *)r_comm->conn_msg->ptr;
 	nccl_ofi_rdma_ep_name_t *rdma_ep_name;
 	nccl_net_ofi_ep_rail_t *ep_rail;
 
 	assert(num_rails <= MAX_NUM_RAILS);
 	assert(num_control_rails <= MAX_NUM_RAILS);
 
-	conn_resp->type = NCCL_OFI_RDMA_MSG_CONN_RESP;
-
 	/* Set r_comm's (local) comm ID to be sent back to remote */
-	conn_resp->local_comm_id = r_comm->local_comm_id;
-
-	/* Send r_comm's remote comm ID */
-	conn_resp->remote_comm_id = r_comm->remote_comm_id;
+	conn_resp->comm_id = r_comm->local_comm_id;
 
 	/* Set number of rails to be sent back to remote for verification */
 	conn_resp->num_rails = num_rails;
@@ -4845,8 +4787,6 @@ static int prepare_conn_resp(nccl_net_ofi_rdma_ep_t *ep,
 		       ep_rail->local_ep_name_len);
 		rdma_ep_name->ep_name_len = ep_rail->local_ep_name_len;
 	}
-
-	return 0;
 }
 
 /*
@@ -4906,14 +4846,8 @@ static int post_send_conn_resp(nccl_net_ofi_rdma_recv_comm_t *r_comm,
  */
 static int close_listen_recv_comm(nccl_net_ofi_rdma_listen_comm_t *l_comm)
 {
-
 	if (!l_comm) {
 		return 0;
-	}
-
-	if (l_comm->req.state == NCCL_OFI_RDMA_REQ_PENDING) {
-		NCCL_OFI_WARN("Unable to free request of listen communicator. Request is still pending. Leaking memory.");
-		return -EINVAL;
 	}
 
 	if (l_comm->r_comm && recv_comm_destroy(l_comm->r_comm)) {
@@ -4933,14 +4867,10 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	nccl_net_ofi_rdma_listen_comm_t *l_comm =
 		(nccl_net_ofi_rdma_listen_comm_t *)listen_comm;
 
+	nccl_ofi_cm_receiver *receiver = nullptr;
+
 	/* Extract communicator state from listen communicator object */
 	nccl_net_ofi_rdma_recv_comm_t *r_comm = l_comm->r_comm;
-
-	/* Extract request used for connect and connect response message */
-	nccl_net_ofi_rdma_req_t *req = &l_comm->req;
-
-	/* Extract struct used for message exchange */
-	nccl_ofi_rdma_connection_info_t *conn_msg = &l_comm->conn_msg;
 
 	/* Retrieve and validate endpoint */
 	nccl_net_ofi_rdma_ep_t *l_comm_ep = (nccl_net_ofi_rdma_ep_t *)l_comm->base.base.ep;
@@ -5001,15 +4931,16 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 			goto exit;
 		}
 
-		/* Check if the connect message is received */
-		nccl_net_ofi_mutex_lock(&req->req_lock);
-		req_state = req->state;
-		nccl_net_ofi_mutex_unlock(&req->req_lock);
+		/* Check if a connect message is received */
+		receiver = l_comm->listener->accept();
 
-		/* Wait until connect message is sent */
-		if (req_state != NCCL_OFI_RDMA_REQ_COMPLETED) {
+		/* Wait until connect message is received */
+		if (receiver == nullptr) {
 			return 0;
 		}
+
+		auto conn_msg = static_cast<const nccl_ofi_rdma_connection_info_t *>
+			(receiver->get_conn_msg_data());
 
 		/* Number of remote rails and number of local rails match */
 		if (conn_msg->num_rails != l_comm_ep->num_rails) {
@@ -5035,6 +4966,8 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 			ret = -EINVAL;
 			goto exit;
 		}
+		r_comm->receiver = receiver;
+		receiver = nullptr;
 		l_comm->r_comm = r_comm;
 
 		/* prepare_recv_comm establishes the endpoint used for this r_comm,
@@ -5055,14 +4988,11 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		ep->base.ref_cnt++;
 		nccl_net_ofi_mutex_unlock(&(domain->base.domain_lock));
 
-		/* Reset request state for connect response message */
-		prepare_send_conn_resp_req(l_comm);
-
 		/* Initialize connect response message */
-		ret = prepare_conn_resp(ep, r_comm, dev_id);
-		if (ret != 0) {
-			goto exit;
-		}
+		nccl_ofi_rdma_connection_info_t conn_resp_msg;
+		prepare_conn_resp(ep, r_comm, dev_id, &conn_resp_msg);
+
+		r_comm->receiver->set_conn_resp_msg_data(&conn_resp_msg);
 
 		l_comm->stage = COMM_SEND_CONN;
 
@@ -5070,13 +5000,6 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	case COMM_SEND_CONN:
 
 		/* COMM_SEND_CONN: Send connect response message to remote */
-		ret = post_send_conn_resp(r_comm, device, ep, req);
-		if (ret == -FI_EAGAIN) {
-			return 0;
-		}
-		else if (ret != 0) {
-			goto exit;
-		}
 
 		l_comm->stage = COMM_CONN_RESP_REQ_PENDING;
 
@@ -5092,23 +5015,20 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 			goto exit;
 		}
 
-		/* Check if the connect response message is sent */
-		nccl_net_ofi_mutex_lock(&req->req_lock);
-		req_state = req->state;
-		nccl_net_ofi_mutex_unlock(&req->req_lock);
+		bool ready = false;
+		ret = r_comm->receiver->test_ready(&ready);
+		if (ret != 0) {
+			goto exit;
+		}
 
-		/* Wait until connect response message is sent */
-		if (req_state != NCCL_OFI_RDMA_REQ_COMPLETED) {
+		/* Wait until connect response message is delivered */
+		if (!ready) {
 			return 0;
 		}
 
-		/* The free list item was allocated on the ep
-		 * associated with the r_comm (as opposed to the
-		 * l_comm).  ep should point to the recv comm ep at
-		 * this point.
-		 */
-		nccl_ofi_freelist_entry_free(ep->conn_msg_fl, r_comm->conn_msg);
-		r_comm->conn_msg = NULL;
+		/* Free the receiver object */
+		delete r_comm->receiver;
+		r_comm->receiver = nullptr;
 
 		*recv_comm = &r_comm->base;
 
@@ -5152,11 +5072,6 @@ static int listen_close(nccl_net_ofi_listen_comm_t *listen_comm)
 	nccl_net_ofi_ep_t *base_ep = l_comm->base.base.ep;
 	assert(base_ep != NULL);
 
-	if (l_comm->req.state == NCCL_OFI_RDMA_REQ_PENDING) {
-		NCCL_OFI_WARN("Unable to free request of listen communicator. Request is still pending. Leaking memory.");
-		return -EINVAL;
-	}
-
 	if (l_comm->r_comm) {
 		ret = recv_comm_destroy(l_comm->r_comm);
 		if (ret != 0) {
@@ -5165,14 +5080,8 @@ static int listen_close(nccl_net_ofi_listen_comm_t *listen_comm)
 		}
 	}
 
-	ret = nccl_net_ofi_mutex_destroy(&l_comm->req.req_lock);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to destroy req_lock");
-		return -ret;
-	}
-
-	/* Release communicator ID */
-	rdma_endpoint_get_device((nccl_net_ofi_rdma_ep_t *)base_ep)->comm_idpool->free_id(l_comm->comm_id);
+	delete l_comm->listener;
+	l_comm->listener = nullptr;
 
 	free(l_comm);
 	ret = base_ep->release_ep(base_ep, false, false);
@@ -5189,7 +5098,6 @@ static int listen(nccl_net_ofi_ep_t *base_ep,
 	size_t comm_id = 0;
 	nccl_net_ofi_rdma_ep_t *ep =
 		(nccl_net_ofi_rdma_ep_t *)base_ep;
-	nccl_net_ofi_ep_rail_t *first_control_rail = rdma_endpoint_get_control_rail(ep, 0);
 
 	/* Retrieve and validate device */
 	nccl_net_ofi_rdma_device_t *device = rdma_endpoint_get_device(ep);
@@ -5203,24 +5111,13 @@ static int listen(nccl_net_ofi_ep_t *base_ep,
 		return ret;
 	}
 
-	/* Build handle */
-	memset(handle, 0, sizeof(nccl_net_ofi_conn_handle_t));
-	assert(sizeof(handle->ep_name) == sizeof(first_control_rail->local_ep_name));
-	memcpy(handle->ep_name, first_control_rail->local_ep_name,
-	       first_control_rail->local_ep_name_len);
-	/* We don't copy the size here since the handle doesn't have a size field.
-	   The size will be distributed later by the connect response message.
-	   Instead, zero the unused bytes here. */
-	memset(handle->ep_name + first_control_rail->local_ep_name_len, 0,
-		sizeof(handle->ep_name) - first_control_rail->local_ep_name_len);
-
 	/* Build listen_comm */
 	l_comm = (nccl_net_ofi_rdma_listen_comm_t *)calloc(1,
 							   sizeof(nccl_net_ofi_rdma_listen_comm_t));
 	if (OFI_UNLIKELY(l_comm == NULL)) {
 		NCCL_OFI_WARN("Couldn't allocate listen_comm for dev %d", dev_id);
 		ret = -ENOMEM;
-		goto error;
+		return ret;
 	}
 
 	/* Initialize listen communicator */
@@ -5230,34 +5127,14 @@ static int listen(nccl_net_ofi_ep_t *base_ep,
 	l_comm->base.accept = accept;
 	l_comm->base.close = listen_close;
 
-	/* Allocate listen communicator ID */
-	comm_id = device->comm_idpool->allocate_id();
-	if (OFI_UNLIKELY(comm_id == FI_KEY_NOTAVAIL)) {
-		l_comm->comm_id = COMM_ID_INVALID;
-		ret = -ENOMEM;
-		goto error;
-	}
-	l_comm->comm_id = (uint32_t)comm_id;
-	handle->comm_id = l_comm->comm_id;
+	/* Create CM listener */
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+	l_comm->listener = domain->cm->listen();
 
-	/*  Add listen comm to ep's lookup array */
-	rdma_device_set_comm(device, l_comm->comm_id, &l_comm->base.base);
-
-	/* Prepare receive request to accept connections */
-	ret = prepare_recv_conn_req(l_comm);
-	if (ret != 0)
-		goto error;
+	*handle = l_comm->listener->get_handle();
 
 	*listen_comm = &l_comm->base;
 
-	goto exit;
-
-error:
-	if (l_comm && COMM_ID_INVALID != l_comm->comm_id) {
-		device->comm_idpool->free_id(l_comm->comm_id);
-	}
-	free(l_comm);
- exit:
 	return ret;
 }
 
@@ -6125,20 +6002,14 @@ static int send_close_deferred(nccl_net_ofi_send_comm_t *send_comm)
  * @return	Connection information, on success
  *		NULL, on others
  */
-static void prepare_send_connect_message(nccl_net_ofi_rdma_ep_t *ep, int dev_id, uint32_t local_comm_id,
-					 uint32_t remote_comm_id, nccl_net_ofi_conn_handle_t *handle,
+static void prepare_send_connect_message(nccl_net_ofi_rdma_ep_t *ep, uint32_t local_comm_id,
 					 nccl_ofi_rdma_connection_info_t *conn_msg)
 {
 	int num_rails = ep->num_rails;
 	int num_control_rails = ep->num_control_rails;
 
-	conn_msg->type = NCCL_OFI_RDMA_MSG_CONN;
-
 	/* Send s_comm's local comm ID to be transferred to receiver */
-	conn_msg->local_comm_id = local_comm_id;
-
-	/* Send s_comm's remote comm ID */
-	conn_msg->remote_comm_id = remote_comm_id;
+	conn_msg->comm_id = local_comm_id;
 
 	/* Set number of rails to be sent back to remote for verification */
 	conn_msg->num_rails = num_rails;
@@ -6491,8 +6362,6 @@ static int rma_write_inline(nccl_net_ofi_send_comm_t *send_comm, void* src, size
  * init_send_comm_rails() to initialize the remaining communicator
  * rails.
  *
- * @param	handle
- * 		Connection Handle transferred OOB by NCCL
  * @param	ep
  *		Rdma endpoint
  * @param	s_comm
@@ -6503,19 +6372,15 @@ static int rma_write_inline(nccl_net_ofi_send_comm_t *send_comm, void* src, size
  * 		error, others
  *
  */
-static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
-				   nccl_net_ofi_rdma_ep_t *ep,
+static inline int create_send_comm(nccl_net_ofi_rdma_ep_t *ep,
 				   nccl_net_ofi_rdma_send_comm_t **s_comm)
 {
 	int ret = 0;
 	size_t comm_id = 0;
-	fi_addr_t remote_addr;
 	nccl_net_ofi_rdma_send_comm_t *ret_s_comm = NULL;
 	int num_rails = ep->num_rails;
 	int num_control_rails = ep->num_control_rails;
 	uint16_t rail_id = 0;
-	nccl_net_ofi_ep_rail_t *first_control_rail = rdma_endpoint_get_control_rail(ep, 0);
-	nccl_net_ofi_rdma_send_comm_rail_t *first_comm_control_rail;
 
 	*s_comm = NULL;
 
@@ -6557,14 +6422,8 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->n_ctrl_received = 0;
 	ret_s_comm->n_ctrl_expected = 0;
 
-	/* Store communicator ID from handle in communicator */
-	if (OFI_UNLIKELY(handle->comm_id >= device->num_comm_ids)) {
-		NCCL_OFI_WARN("Received an invalid communicator ID %" PRIu32 " for device %d", handle->comm_id,
-			      dev_id);
-		ret = -EINVAL;
-		goto error;
-	}
-	ret_s_comm->remote_comm_id = handle->comm_id;
+	/* We will get this later from the connect response message */
+	ret_s_comm->remote_comm_id = 0;
 
 	/* Allocate send communicator ID */
 	comm_id = device->comm_idpool->allocate_id();
@@ -6582,25 +6441,6 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->num_rails = num_rails;
 	ret_s_comm->num_control_rails = num_control_rails;
 
-	/* Insert remote name into AV of first rail */
-	ret = fi_av_insert(first_control_rail->av,
-			   (void *)handle->ep_name, 1,
-			   &remote_addr, 0, NULL);
-	if (OFI_UNLIKELY(ret != 1)) {
-		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %d",
-			      dev_id, ret);
-		ret = -EINVAL;
-		goto error;
-	}
-
-	/* Store remote address of first rail in communicator */
-	first_comm_control_rail = &ret_s_comm->control_rails[0];
-	first_comm_control_rail->remote_addr = remote_addr;
-
-	/* Store local libfabric endpoint of control rail */
-	first_comm_control_rail->local_ep = first_control_rail->ofi_ep;
-	ret_s_comm->num_init_control_rails = 1;
-
 	/* Allocate request free list */
 	ret = nccl_ofi_freelist_init(sizeof(nccl_net_ofi_rdma_req_t), 16, 16,
 				     NCCL_OFI_MAX_SEND_REQUESTS,
@@ -6611,16 +6451,6 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 			      dev_id, rail_id);
 		goto error;
 	}
-
-	/* Allocate connect message, will be returned after send completion */
-	ret_s_comm->conn_msg = nccl_ofi_freelist_entry_alloc(ep->conn_msg_fl);
-	if (ret_s_comm->conn_msg == NULL) {
-		NCCL_OFI_WARN("Failed to allocate conn_msg buffer");
-		return -ENOMEM;
-	}
-
-	prepare_send_connect_message(ep, dev_id, ret_s_comm->local_comm_id, ret_s_comm->remote_comm_id, handle,
-				     (nccl_ofi_rdma_connection_info_t *)ret_s_comm->conn_msg->ptr);
 
 	/* Allocate message buffer */
 	ret_s_comm->msgbuff = nccl_ofi_msgbuff_init(NCCL_OFI_RDMA_MSGBUFF_SIZE, NCCL_OFI_RDMA_SEQ_BITS);
@@ -6760,10 +6590,8 @@ static int post_send_conn(nccl_net_ofi_rdma_send_comm_t *s_comm,
  *		connection establishment
  *
  * The connect functionality does the following: (a) create send communicator
- * with only the first communicator rail being initalized, (b) post send
- * operation to send connect message to remote, containing local endpoint
- * addresses, (c) wait until message is delivered, (d) waits for the connect
- * response message, and (e) calls finish_connect.
+ * (b) call CM connect() operation to send connect message to remote and receive
+ * for the connect response message, and (e) calls finish_connect.
  *
  * The `finish_connect' method completes the initialization of the remaining
  * communicator rails using the received connect responce message.
@@ -6773,21 +6601,17 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 			    nccl_net_ofi_send_comm_t **send_comm)
 {
 	int ret = 0;
-	nccl_net_ofi_rdma_req_state_t conn_resp_req_state;
-	nccl_net_ofi_rdma_req_state_t conn_msg_state;
+
 	*send_comm = NULL;
 	nccl_net_ofi_rdma_ep_t *ep =
 		(nccl_net_ofi_rdma_ep_t *)base_ep;
 
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+
 	/* Extract connection state of the communicator */
 	save_comm_state_t *comm_state = &(handle->state);
-	nccl_net_ofi_rdma_req_t *req = (nccl_net_ofi_rdma_req_t *)comm_state->req;
 	nccl_net_ofi_rdma_send_comm_t *s_comm =
 		(nccl_net_ofi_rdma_send_comm_t *)comm_state->comm;
-
-	/* Retrieve and validate devices */
-	nccl_net_ofi_rdma_device_t *device = (nccl_net_ofi_rdma_device_t *)base_ep->domain->device;
-	assert(device != NULL);
 
 	/* Connection establishment is not done yet */
 	nccl_ofi_comm_stage_t stage = comm_state->stage;
@@ -6820,7 +6644,7 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		assert(s_comm == NULL);
 
 		/* Build send communicator with one comm rail */
-		ret = create_send_comm(handle, ep, &s_comm);
+		ret = create_send_comm(ep, &s_comm);
 		if (OFI_UNLIKELY(ret != 0)) {
 			return ret;
 		}
@@ -6829,42 +6653,20 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		}
 		comm_state->comm = &s_comm->base.base;
 
-		/* Prepare connect request to be sent to peer */
-		req = prepare_send_conn_req(s_comm);
-		if (OFI_UNLIKELY(req == NULL)) {
-			send_comm_destroy(s_comm);
-			return -ENOMEM;
-		}
-		comm_state->req = &req->base;
+		nccl_ofi_rdma_connection_info_t conn_msg;
+		prepare_send_connect_message(ep, s_comm->local_comm_id, &conn_msg);
 
-		/* Prepare request to receive connect response message */
-		s_comm->conn_resp_req = prepare_recv_conn_resp_req(s_comm);
-		if (OFI_UNLIKELY(s_comm->conn_resp_req == NULL)) {
-			send_comm_destroy(s_comm);
-			return -EINVAL;
-		}
+		/* Create connector */
+		s_comm->connector = domain->cm->connect(*handle, &conn_msg);
 
 		comm_state->stage = COMM_SEND_CONN;
 		fallthrough;
 	case COMM_SEND_CONN:
 
-		/* COMM_SEND_CONN: Post a connect message to send peer connections */
-		ret = post_send_conn(s_comm, device, ep, req);
-		if (ret == -FI_EAGAIN) {
-			return 0;
-		}
-		else if (ret != 0) {
-			req->free(req, false);
-			send_comm_destroy(s_comm);
-			return ret;
-		}
-
 		comm_state->stage = COMM_CONN_REQ_PENDING;
 		fallthrough;
 	case COMM_CONN_REQ_PENDING:
-		/* COMM_CONN_REQ_PENDING: Wait until connect message
-		 * has been sent. Afterwards, reset previously used
-		 * request. */
+		/* COMM_CONN_REQ_PENDING: Wait until connection is complete */
 
 		/* Progress our engine to get completions */
 		ret = ofi_process_cq(ep);
@@ -6875,53 +6677,20 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 			return ret;
 		}
 
-		/* Check if the connect message is sent */
-		nccl_net_ofi_mutex_lock(&req->req_lock);
-		conn_msg_state = req->state;
-		nccl_net_ofi_mutex_unlock(&req->req_lock);
-
-		/* Wait until connect message is sent */
-		if (conn_msg_state != NCCL_OFI_RDMA_REQ_COMPLETED) {
-			return 0;
-		}
-
-		/* Release connect message request */
-		req->free(req, false);
-		comm_state->req = NULL;
-		req = NULL;
-
-		comm_state->stage = COMM_RECV_CONN;
-		fallthrough;
-	case COMM_RECV_CONN:
-		/* COMM_RECV_CONN: Receive connect response message from remote */
-
-		assert(s_comm && s_comm->num_rails > 0);
-
-		comm_state->stage = COMM_CONN_RESP_REQ_PENDING;
-		fallthrough;
-	case COMM_CONN_RESP_REQ_PENDING:
-
-		/* Progress our engine to get completions. If the
-		 * connect response message has arrived, the
-		 * connection establishment will be finalized. */
-		ret = ofi_process_cq(ep);
-		if (OFI_UNLIKELY(ret != 0)) {
+		/* Check if the connection is complete */
+		bool ready = false;
+		ret = s_comm->connector->test_ready(&ready);
+		if (ret != 0 || !ready) {
 			return ret;
-		}
-
-		nccl_net_ofi_mutex_lock(&s_comm->conn_resp_req->req_lock);
-		conn_resp_req_state = s_comm->conn_resp_req->state;
-		nccl_net_ofi_mutex_unlock(&s_comm->conn_resp_req->req_lock);
-
-		/* Wait until conn resp message is received */
-		if (conn_resp_req_state != NCCL_OFI_RDMA_REQ_COMPLETED) {
-			return 0;
 		}
 
 		ret = finish_connect(s_comm);
 		if (OFI_UNLIKELY(ret != 0)) {
 			return ret;
 		}
+
+		delete s_comm->connector;
+		s_comm->connector = nullptr;
 
 		comm_state->stage = COMM_CONNECTED;
 
@@ -7496,6 +7265,9 @@ static nccl_net_ofi_domain_t *nccl_net_ofi_rdma_device_create_domain(nccl_net_of
 	if (OFI_UNLIKELY(ret != 0)) {
 		goto error;
 	}
+
+	/* Connection manager for this domain (TODO) */
+	domain->cm = nullptr; assert(false);
 
 error:
 	if (ret != 0) {

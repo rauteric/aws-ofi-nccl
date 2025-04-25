@@ -5,17 +5,15 @@
 #ifndef NCCL_OFI_CM_TYPES_H_
 #define NCCL_OFI_CM_TYPES_H_
 
-#define MAX_NUM_RAILS (4)
-
 #include <rdma/fabric.h>
 
 #include "nccl_ofi.h"
 
 /* Forward class declarations */
 class nccl_ofi_connection_manager;
-class nccl_ofi_cm_s_comm;
-class nccl_ofi_cm_r_comm;
-class nccl_ofi_cm_l_comm;
+class nccl_ofi_cm_send_connector;
+class nccl_ofi_cm_receiver_info;
+class nccl_ofi_cm_listener;
 
 /* Struct types */
 typedef char ep_name[MAX_EP_ADDR];
@@ -38,10 +36,6 @@ struct nccl_ofi_cm_conn_msg {
 		SEND_CONN_RESP_MSG
 	} type;
 
-	/* Number of rails */
-	uint16_t num_rails;
-	uint16_t num_control_rails;
-
 	/* A comm identitifer that uniquely identifies the comm on the local side
 	   (the sender of this conn msg). The receiver must use this ID when
 	   sending messages to sender */
@@ -51,19 +45,11 @@ struct nccl_ofi_cm_conn_msg {
 	   (the receiver of this conn msg) */
 	uint32_t remote_comm_id;
 
-	/* Arrays of `MAX_NUM_RAILS` structs. The member `num_rails` and
-	 * `num_control_rails` indicate the number of entries that are in use. */
-	cm_ep_name control_ep_names[MAX_NUM_RAILS];
-	cm_ep_name ep_names[MAX_NUM_RAILS];
-
-	/* Endpoint used for connection establishment (also transmitted in handle) */
+	/* Endpoint used for connection establishment
+	   listener's ep is also transmitted in the handle */
 	cm_ep_name conn_ep_name;
-};
 
-struct nccl_ofi_cm_ep_rail_info
-{
-	std::vector<cm_ep_name> control_ep_names;
-	std::vector<cm_ep_name> ep_names;
+	/* User (transport) data will be at the end of the conn msg */
 };
 
 #endif /* NCCL_OFI_CM_TYPES_H_ */

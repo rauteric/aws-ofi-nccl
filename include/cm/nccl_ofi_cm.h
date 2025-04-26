@@ -12,10 +12,10 @@
 #include <vector>
 
 #include "nccl_ofi.h"
-#include "nccl_ofi_idpool.h"
 
 #include "cm/nccl_ofi_cm_types.h"
 #include "cm/nccl_ofi_cm_comms.h"
+#include "cm/nccl_ofi_cm_resources.h"
 
 /**
  * An object returned from listener::accept() which represents a connection in
@@ -110,9 +110,9 @@ private:
 	 * @param cm:
 	 *      An instance of the connect manager for this domain
 	 */
-	nccl_ofi_cm_listener(nccl_ofi_connection_manager &cm);
+	nccl_ofi_cm_listener(nccl_ofi_cm::cm_resources &resources);
 
-	nccl_ofi_connection_manager &cm;
+	nccl_ofi_cm::cm_resources &resources;
 	uint32_t listener_id;
 	nccl_net_ofi_conn_handle handle;
 	std::deque<nccl_ofi_cm_receiver&> ready_receiver_queue;
@@ -161,7 +161,7 @@ private:
 	 * @param transport_connect_msg:
 	 * 	pointer to transport-provided connect message
 	 */
-	nccl_ofi_cm_send_connector(nccl_ofi_connection_manager *cm,
+	nccl_ofi_cm_send_connector(nccl_ofi_cm::cm_resources &resources,
 		nccl_net_ofi_conn_handle handle,
 		const void *transport_connect_msg);
 
@@ -173,8 +173,8 @@ private:
 		conn_msg_delivered = true;
 	}
 
-	/* Back-pointer to connection manager */
-	nccl_ofi_connection_manager *cm;
+	/* Resources reference */
+	nccl_ofi_cm::cm_resources &resources;
 
 	std::vector<uint8_t> conn_msg;
 	std::vector<uint8_t> conn_resp_msg;
@@ -224,12 +224,12 @@ public:
 	 *      memory registrations use unique MR keys that don't conflict with
 	 *      other parts of the code
 	 *
-	 * @param conn_msg_size:
+	 * @param conn_msg_data_size:
 	 *      size of transport-specific part of connect and connect response
 	 *      messages
 	 */
 	nccl_ofi_connection_manager(fi_info *info, fid_domain *domain, fid_cq *cq,
-				    nccl_ofi_idpool_t &mr_key_pool, size_t conn_msg_size);
+				    nccl_ofi_idpool_t &mr_key_pool, size_t conn_msg_data_size);
 
 	/**
 	 * Destructor. Finalizes CM endpoint and other state.
@@ -237,7 +237,7 @@ public:
 	 * Note: when the connection manager is destroyed, all associated
 	 * listeners and connectors are invalidated.
 	 */
-	~nccl_ofi_connection_manager();
+	~nccl_ofi_connection_manager() = default;
 
 	/**
 	 * Create a new listener to accept connections
@@ -256,20 +256,10 @@ public:
 	 * 	conn_msg_size (parameter to constructor)
 	 */
 	nccl_ofi_cm_send_connector* connect(nccl_net_ofi_conn_handle handle,
-		const void *transport_connect_msg);
+					    const void *transport_connect_msg);
 private:
 
-	/* TODO store cm endpoint here */
-
-	/**
-	 * ID pools to manage CM-internal listener and connector IDs. These are
-	 * transparent to the transport and are not related to any transport-
-	 * chosen IDs
-	 */
-	nccl_ofi_idpool_t listener_id_pool;
-	nccl_ofi_idpool_t connector_id_pool;
-
-	size_t conn_msg_size;
+	nccl_ofi_cm::cm_resources resources;
 };
 
 

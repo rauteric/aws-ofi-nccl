@@ -5,33 +5,19 @@
 
 #include <stdexcept>
 
+#include "nccl_ofi.h"
+
 #include "cm/nccl_ofi_cm_reqs.h"
 #include "cm/nccl_ofi_cm.h"
 
-static inline int cm_post_send(fid_ep *ep, nccl_ofi_freelist_elem_t *send_elem, fi_addr_t dest_addr,
-			       nccl_ofi_cm_req *req)
-{
-	nccl_ofi_cm_mr_handle *mr_handle = static_cast<nccl_ofi_cm_mr_handle *>(send_elem->mr_handle);
-	void *desc = fi_mr_desc(mr_handle->mr);
+using namespace nccl_ofi_cm;
 
-	ssize_t ret = fi_send(ep, send_elem->ptr, sizeof(nccl_ofi_cm_conn_msg), desc,
-			      dest_addr, &req->ctx.ofi_ctx);
-	if (ret != 0 && ret != -FI_EAGAIN) {
-		NCCL_OFI_WARN("Error in call to fi_send. RC: %zd, Error: %s",
-				ret, fi_strerror(-ret));
-		return static_cast<int>(ret);
-	} else {
-		NCCL_OFI_INFO(NCCL_INIT, "Post send");
-	}
-
-	return static_cast<int>(ret);
-}
 
 static inline int cm_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 					 struct fi_cq_entry *cq_entry_base,
 					 uint16_t rail_id)
 {
-	nccl_ofi_cm_req *req = container_of(ctx, nccl_ofi_cm_req, ctx);
+	nccl_ofi_cm_req *req = cpp_container_of(ctx, &nccl_ofi_cm_req::ctx);
 
 	return req->handle_completion();
 }
@@ -55,7 +41,7 @@ static inline int cm_req_handle_error_entry(nccl_net_ofi_context_t *ctx,
 	}
 
 	assert(ctx);
-	nccl_ofi_cm_req *req = container_of(ctx, nccl_ofi_cm_req, ctx);
+	nccl_ofi_cm_req *req = cpp_container_of(ctx, &nccl_ofi_cm_req::ctx);
 
 	NCCL_OFI_WARN("Request %p completed with error. RC: %d. Error: %d (%s). Completed length: %ld",
 		req, err_entry->err,
@@ -82,57 +68,97 @@ nccl_ofi_cm_req::nccl_ofi_cm_req()
 }
 
 
-nccl_ofi_cm_rx_req::nccl_ofi_cm_rx_req(nccl_ofi_connection_manager *_cm)
-				       : cm(_cm)
-{
-	rx_elem = cm->alloc_conn_msg();
-	if (rx_elem == NULL) {
-		throw std::runtime_error("Failed to allocate rx buff entry");
-	}
-}
-
 nccl_ofi_cm_rx_req::~nccl_ofi_cm_rx_req()
 {
-	cm->free_conn_msg(rx_elem);
+	resources.buff_mgr.free_conn_msg(rx_elem);
 }
 
 int nccl_ofi_cm_rx_req::progress()
 {
-	nccl_ofi_cm_mr_handle *mr_handle = static_cast<nccl_ofi_cm_mr_handle *>(rx_elem->mr_handle);
-	void *desc = fi_mr_desc(mr_handle->mr);
-
-	ssize_t ret = fi_recv(cm->get_ep(), rx_elem->ptr, sizeof(nccl_ofi_cm_conn_msg), desc,
-			      FI_ADDR_UNSPEC, &ctx.ofi_ctx);
-	if (ret != 0 && ret != -FI_EAGAIN) {
-		NCCL_OFI_WARN("Error posting rx buffer. RC: %zd, Error: %s",
-			      ret, fi_strerror(-ret));
-		return static_cast<int>(ret);
-	}
-
-	return static_cast<int>(ret);
+	return resources.ep.post_recv(rx_elem, resources.get_conn_msg_size(), *this);
 }
 
 
 int nccl_ofi_cm_send_conn_req::progress()
 {
-	return cm_post_send(ep, send_elem, cm_s_comm->dest_addr, this);
+	return resources.ep.post_send(send_elem, resources.get_conn_msg_size(), dest_addr, *this);
 }
 
 int nccl_ofi_cm_send_conn_req::handle_completion()
 {
-	cm_s_comm->set_conn_msg_delivered();
+	NCCL_OFI_INFO(NCCL_INIT, "Send completion");
+	done_callback();
+	/* Free this request resources */
+	delete this;
 	return 0;
+}
+
+nccl_ofi_cm_send_conn_resp_req::nccl_ofi_cm_send_conn_resp_req
+	(cm_resources &_resources, fi_addr_t _dest_addr,
+	 std::function<void()> _done_callback) :
+
+	resources(_resources),
+	send_elem(resources.buff_mgr.allocate_conn_msg()),
+	dest_addr(_dest_addr),
+	done_callback(_done_callback)
+{
+	/**
+	 * We use a different behavior depending on the value of
+	 * data_progress_auto
+	 *
+	 * When data_progress_auto is true (i.e., we are using a provider
+	 * supporting FI_PROGRESS_AUTO), we modify connection establishment
+	 * behavior to support NCCL's shared-comm/multi-recv behavior.
+	 *
+	 * Briefly, in shared-comm/multi-recv mode, NCCL will try to establish
+	 * multiple communicators in parallel, and use the first one(s) that
+	 * succeed. For plugin's conenction establishment, the resulting
+	 * requirement is summarized as: after sending the connect response
+	 * message (which is the final message of connection establishment), the
+	 * plugin must return a valid recv comm, not NULL.
+	 *
+	 * To support this, we use fi_inject for the connection response message
+	 * so that we don't have to process the resulting completion. We rely on
+	 * the provider making progress on the request without NCCL calling into
+	 * the plugin to poll the completion queue.
+	 *
+	 * When we don't have auto progress support, we maintain the old
+	 * behavior that returns NULL from accept() until the connect response
+	 * message is delivered. This approach will lead to mismatched
+	 * communicators and deadlock in shared-comm/multi-recv mode.
+	 */
+	use_inject = data_progress_auto;
+}
+
+nccl_ofi_cm_send_conn_resp_req::~nccl_ofi_cm_send_conn_resp_req()
+{
+	resources.buff_mgr.free_conn_msg(send_elem);
 }
 
 int nccl_ofi_cm_send_conn_resp_req::progress()
 {
-	return cm_post_send(ep, send_elem, cm_r_comm->dest_addr, this);
+	if (use_inject) {
+		int ret = resources.ep.post_inject(send_elem.ptr, resources.get_conn_msg_size(),
+						   dest_addr);
+		if (ret == 0) {
+			/* Immediately complete request and destroy resources */
+			return this->handle_completion();
+		}
+
+		return ret;
+	} else {
+		return resources.ep.post_send(send_elem, resources.get_conn_msg_size(),
+					      dest_addr, *this);
+	}
 }
 
 
 int nccl_ofi_cm_send_conn_resp_req::handle_completion()
 {
-	cm_r_comm->set_conn_resp_msg_delivered();
+	NCCL_OFI_INFO(NCCL_INIT, "Send completion");
+	done_callback();
+	/* Free this request resources */
+	delete this;
 	return 0;
 }
 
@@ -140,32 +166,22 @@ int nccl_ofi_cm_send_conn_resp_req::handle_completion()
 int nccl_ofi_cm_rx_req::handle_completion()
 {
 	NCCL_OFI_INFO(NCCL_INIT, "Recv completion");
-	nccl_ofi_cm_conn_msg *conn_msg = static_cast<nccl_ofi_cm_conn_msg *>(rx_elem->ptr);
+	nccl_ofi_cm_conn_msg *conn_msg = static_cast<nccl_ofi_cm_conn_msg *>(rx_elem.ptr);
 	switch(conn_msg->type) {
 	case nccl_ofi_cm_conn_msg::SEND_CONN_MSG: {
 
-		nccl_ofi_cm_l_comm *l_comm = cm->get_l_comm(conn_msg->remote_comm_id);
-		if (l_comm == nullptr) {
-			NCCL_OFI_WARN("Received conn_msg for invalid l_comm %u",
-				      conn_msg->remote_comm_id);
-			return -EINVAL;
-		}
+		nccl_ofi_cm_listener &listener =
+			resources.listener_map.get_connector(conn_msg->remote_id);
 
-		/* TODO lock on something? */
-		l_comm->process_conn_msg(*conn_msg);
+		listener.process_conn_msg(*conn_msg);
 		break;
 	}
 	case nccl_ofi_cm_conn_msg::SEND_CONN_RESP_MSG: {
 
-		nccl_ofi_cm_s_comm *s_comm = cm->get_s_comm(conn_msg->remote_comm_id);
-		if (s_comm == nullptr) {
-			NCCL_OFI_WARN("Received conn_msg for invalid l_comm %u",
-				      conn_msg->remote_comm_id);
-			return -EINVAL;
-		}
+		nccl_ofi_cm_send_connector &connector =
+			resources.send_connector_map.get_connector(conn_msg->remote_id);
 
-		/* TODO lock? */
-		s_comm->set_conn_resp_msg(*conn_msg);
+		connector.process_conn_resp_msg(*conn_msg);
 		break;
 	}
 

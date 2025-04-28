@@ -53,16 +53,28 @@ public:
 	 */
 	int test_ready(bool *ready);
 
-	~nccl_ofi_cm_receiver();
+	~nccl_ofi_cm_receiver() = default;
 
 private:
 	/**
 	 * Construct a receiver. Transport should use listener::accept() instead
 	 * of this constructor.
 	 */
-	nccl_ofi_cm_receiver(nccl_ofi_cm_listener &listener, void *conn_msg);
+	nccl_ofi_cm_receiver(nccl_ofi_cm::cm_resources &resources,
+			     const nccl_ofi_cm_conn_msg &conn_msg);
+
+	void set_conn_resp_msg_delivered();
+
+	nccl_ofi_cm::cm_resources &resources;
+	fi_addr_t dest_addr;
+	uint64_t sender_id;
+
 	std::vector<uint8_t> user_conn_msg_data;
-	std::vector<uint8_t> user_conn_resp_msg;
+
+	nccl_ofi_cm::nccl_ofi_cm_send_conn_resp_req* conn_resp_req;
+
+	bool conn_resp_msg_sent;
+	bool conn_resp_msg_delivered;
 
 	friend class nccl_ofi_cm_listener;
 };
@@ -112,12 +124,17 @@ private:
 	 */
 	nccl_ofi_cm_listener(nccl_ofi_cm::cm_resources &resources);
 
-	nccl_ofi_cm::cm_resources &resources;
-	uint32_t listener_id;
-	nccl_net_ofi_conn_handle handle;
-	std::deque<nccl_ofi_cm_receiver&> ready_receiver_queue;
+	void process_conn_msg(nccl_ofi_cm_conn_msg &conn_msg);
 
+	nccl_ofi_cm::cm_resources &resources;
+	uint64_t listener_id;
+	nccl_net_ofi_conn_handle handle;
+	std::deque<nccl_ofi_cm_receiver *> ready_receiver_queue;
+
+	/* For constructor */
 	friend class nccl_ofi_connection_manager;
+	/* For process_conn_msg */
+	friend class nccl_ofi_cm::nccl_ofi_cm_rx_req;
 };
 
 
@@ -158,38 +175,32 @@ private:
 	 *
 	 * @param cm: associated connection manager
 	 * @param handle: handle from listener on a remote node
-	 * @param transport_connect_msg:
-	 * 	pointer to transport-provided connect message
+	 * @param conn_msg_data:
+	 * 	pointer to transport-provided connect message data
 	 */
 	nccl_ofi_cm_send_connector(nccl_ofi_cm::cm_resources &resources,
 		nccl_net_ofi_conn_handle handle,
-		const void *transport_connect_msg);
+		const void *conn_msg_data);
 
-	fi_addr_t dest_addr;
+	void process_conn_resp_msg(const nccl_ofi_cm_conn_msg &conn_resp_msg);
 
-	void set_conn_resp_msg_data(const void *conn_resp_msg_data);
-
-	void set_conn_msg_delivered() {
-		conn_msg_delivered = true;
-	}
+	void set_conn_msg_delivered();
 
 	/* Resources reference */
 	nccl_ofi_cm::cm_resources &resources;
 
-	std::vector<uint8_t> conn_msg;
-	std::vector<uint8_t> conn_resp_msg;
-	nccl_ofi_freelist_elem_t *send_elem;
-	nccl_ofi_cm_send_conn_req send_conn_req;
-	std::optional<nccl_ofi_cm_conn_msg> received_conn_resp_msg;
+	fi_addr_t dest_addr;
+
+	std::optional<std::vector<uint8_t>> conn_resp_msg_data;
+	nccl_ofi_cm::nccl_ofi_cm_send_conn_req *send_conn_req;
 
 	bool conn_msg_sent;
 	bool conn_msg_delivered;
 
-	uint32_t s_comm_id;
-
-	void prepare_conn_msg(nccl_net_ofi_conn_handle &handle, nccl_ofi_cm_conn_msg &conn_msg);
+	uint64_t send_connector_id;
 
 	friend class nccl_ofi_connection_manager;
+	friend class nccl_ofi_cm::nccl_ofi_cm_rx_req;
 };
 
 /**

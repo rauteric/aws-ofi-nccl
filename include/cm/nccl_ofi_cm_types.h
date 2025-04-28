@@ -21,6 +21,13 @@ struct cm_ep_name {
 	size_t name_len;
 };
 
+/**
+ * Represents a message exchanged between peers for connection establishment
+ *
+ * The same structure is used for both connect and connect-response messages
+ *
+ * Transport-specific data is appended to the end of this message
+ */
 struct nccl_ofi_cm_conn_msg {
 
 	enum {
@@ -28,20 +35,19 @@ struct nccl_ofi_cm_conn_msg {
 		SEND_CONN_RESP_MSG
 	} type;
 
-	/* A comm identitifer that uniquely identifies the comm on the local side
-	   (the sender of this conn msg). The receiver must use this ID when
-	   sending messages to sender */
-	uint32_t local_id;
+	/* A comm identitifer that uniquely identifies the local side
+	   (the sender of this conn msg).  */
+	uint64_t local_id;
 
 	/* A comm identitifer that uniquely identifies the comm on the remote side
 	   (the receiver of this conn msg) */
-	uint32_t remote_id;
+	uint64_t remote_id;
 
 	/* Endpoint used for connection establishment
 	   listener's ep is also transmitted in the handle */
 	cm_ep_name conn_ep_name;
 
-	/* User (transport) data will be at the end of the conn msg */
+	/* Transport data will be at the end of the conn msg */
 };
 
 #endif /* NCCL_OFI_CM_TYPES_H_ */

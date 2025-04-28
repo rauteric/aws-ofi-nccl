@@ -6,7 +6,10 @@
 #define NCCL_OFI_CM_REQS_H_
 
 #include "cm/nccl_ofi_cm_types.h"
+#include "cm/nccl_ofi_cm_resources.h"
 #include "nccl_ofi_freelist.h"
+
+namespace nccl_ofi_cm {
 
 /**
  * Note: requests are not to be used directly by the transport; only by the
@@ -41,13 +44,15 @@ class nccl_ofi_cm_rx_req : public nccl_ofi_cm_req
 {
 public:
 	/**
-	 * Constructor. Allocates a new freelist elem rx_elem from the
-	 * provided cm.
+	 * Constructor. Frees the freelist elem back to the given cm.
 	 */
-	nccl_ofi_cm_rx_req(nccl_ofi_connection_manager *cm);
+	nccl_ofi_cm_rx_req(cm_resources &_resources) :
+		resources(_resources),
+		rx_elem(resources.buff_mgr.allocate_conn_msg())
+		{ }
 
 	/**
-	 * Destructor. Frees the freelist elem back to the given cm.
+	 * Destructor. Frees the freelist elem.
 	 */
 	~nccl_ofi_cm_rx_req();
 
@@ -55,50 +60,76 @@ public:
 	virtual int progress();
 
 private:
-	nccl_ofi_connection_manager *cm;
-	nccl_ofi_freelist_elem_t *rx_elem;
+
+	cm_resources &resources;
+	nccl_ofi_freelist_elem_t &rx_elem;
 };
 
 /**
- * Send connect message request. Member of cm_s_comm.
+ * Send connect message request. Member of send_connector.
  */
 class nccl_ofi_cm_send_conn_req : public nccl_ofi_cm_req
 {
 public:
+
+	nccl_ofi_cm_send_conn_req(cm_resources &_resources, fi_addr_t _dest_addr,
+				  std::function<void()> _done_callback) :
+		resources(_resources),
+		send_elem(resources.buff_mgr.allocate_conn_msg()),
+		dest_addr(_dest_addr),
+		done_callback(_done_callback)
+	{ }
+
+	/**
+	 * Destructor. Frees the freelist elem.
+	 */
+	~nccl_ofi_cm_send_conn_req();
+
+	nccl_ofi_cm_conn_msg &get_conn_msg()
+	{
+		return *static_cast<nccl_ofi_cm_conn_msg*>(send_elem.ptr);
+	};
+
 	virtual int handle_completion();
 	virtual int progress();
-
-	nccl_ofi_cm_send_conn_req(nccl_ofi_cm_send_connector *_cm_s_comm, fid_ep *_ep) :
-		cm_s_comm(_cm_s_comm),
-		send_elem(nullptr),
-		ep(_ep) { }
-
-	void set_send_elem(nccl_ofi_freelist_elem_t *_send_elem) { this->send_elem = _send_elem; }
 private:
-	nccl_ofi_cm_send_connector *cm_s_comm;
-	nccl_ofi_freelist_elem_t *send_elem;
-	fid_ep *ep;
+	cm_resources &resources;
+	nccl_ofi_freelist_elem_t &send_elem;
+	fi_addr_t dest_addr;
+	std::function<void()> done_callback;
 };
 
 /**
- * Send connect response message request. Member of cm_r_comm.
+ * Send connect response message request. Member of receiver.
  */
 class nccl_ofi_cm_send_conn_resp_req : public nccl_ofi_cm_req
 {
 public:
+
+	nccl_ofi_cm_send_conn_resp_req(cm_resources &_resources, fi_addr_t _dest_addr,
+				       std::function<void()> _done_callback);
+
+	/**
+	 * Destructor. Frees the freelist elem.
+	 */
+	~nccl_ofi_cm_send_conn_resp_req();
+
+	nccl_ofi_cm_conn_msg &get_conn_resp_msg()
+	{
+		return *static_cast<nccl_ofi_cm_conn_msg*>(send_elem.ptr);
+	};
+
 	virtual int handle_completion();
 	virtual int progress();
 
-	nccl_ofi_cm_send_conn_resp_req(nccl_ofi_cm_receiver_info *_cm_r_comm, fid_ep *_ep) :
-		cm_r_comm(_cm_r_comm),
-		send_elem(nullptr),
-		ep(_ep) { }
-
-	void set_send_elem(nccl_ofi_freelist_elem_t *_send_elem) { this->send_elem = _send_elem; }
 private:
-	nccl_ofi_cm_receiver_info *cm_r_comm;
-	nccl_ofi_freelist_elem_t *send_elem;
-	fid_ep *ep;
+	bool use_inject;
+	cm_resources &resources;
+	nccl_ofi_freelist_elem_t &send_elem;
+	fi_addr_t dest_addr;
+	std::function<void()> done_callback;
 };
+
+}
 
 #endif /* NCCL_OFI_CM_REQS_H_ */

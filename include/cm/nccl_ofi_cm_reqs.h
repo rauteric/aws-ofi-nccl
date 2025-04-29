@@ -17,7 +17,7 @@ namespace nccl_ofi_cm {
  */
 
 /**
- * Base class for requests
+ * Abstract base class for requests
  */
 class nccl_ofi_cm_req
 {
@@ -25,7 +25,20 @@ public:
 	nccl_ofi_cm_req();
 	nccl_net_ofi_context_t ctx;
 
+	/**
+	 * To be called when the request completes
+	 *
+	 * @return: 0 (success) or negative errno
+	 */
 	virtual int handle_completion() = 0;
+
+	/**
+	 * Post the Libfabric operation encapsulated by the request
+	 *
+	 * @return the error from the underlying Libfabric operation, including:
+	 * - -FI_EAGAIN: operation should be added to pending requests queue and
+	 *   retried later
+	 */
 	virtual int progress() = 0;
 
 protected:
@@ -63,20 +76,38 @@ class nccl_ofi_cm_send_conn_req : public nccl_ofi_cm_req
 {
 public:
 
-	nccl_ofi_cm_send_conn_req(cm_resources &_resources, fi_addr_t _dest_addr,
-				  std::function<void()> _done_callback);
+	/**
+	 * Constructor.
+	 *
+	 * @param resources: back-reference to CM resources
+	 * @param dest_addr: destination address of the connect message
+	 * @param done_callback: a callback when the request is complete
+	 */
+	nccl_ofi_cm_send_conn_req(cm_resources &resources, fi_addr_t dest_addr,
+				  std::function<void()> done_callback);
 
 	/**
 	 * Destructor. Frees the freelist elem.
 	 */
 	virtual ~nccl_ofi_cm_send_conn_req();
 
+	/**
+	 * Get the (registered) connect message allocated from the buffer
+	 * manager. Caller should populate the connect message
+	 */
 	nccl_ofi_cm_conn_msg &get_conn_msg()
 	{
 		return *static_cast<nccl_ofi_cm_conn_msg*>(send_elem.ptr);
 	};
 
+	/**
+	 * Called when the request completes
+	 */
 	virtual int handle_completion();
+
+	/**
+	 * Post the send operation
+	 */
 	virtual int progress();
 private:
 	cm_resources &resources;
@@ -91,26 +122,47 @@ private:
 class nccl_ofi_cm_send_conn_resp_req : public nccl_ofi_cm_req
 {
 public:
-
-	nccl_ofi_cm_send_conn_resp_req(cm_resources &_resources, fi_addr_t _dest_addr,
-				       std::function<void()> _done_callback);
+	/**
+	 * Constructor.
+	 *
+	 * @param resources: back-reference to CM resources
+	 * @param dest_addr: destination address of the connect message
+	 * @param done_callback: a callback when the request is complete
+	 */
+	nccl_ofi_cm_send_conn_resp_req(cm_resources &resources, fi_addr_t dest_addr,
+				       std::function<void()> done_callback);
 
 	/**
 	 * Destructor. Frees the freelist elem.
 	 */
 	virtual ~nccl_ofi_cm_send_conn_resp_req();
 
+	/**
+	 * Get the (registered) connect response message allocated from the
+	 * buffer manager. Caller should populate the connect response message
+	 */
 	nccl_ofi_cm_conn_msg &get_conn_resp_msg()
 	{
 		return *static_cast<nccl_ofi_cm_conn_msg*>(send_elem.ptr);
 	};
 
+	/**
+	 * Called when the request completes
+	 */
 	virtual int handle_completion();
+
+	/**
+	 * Post the send operation
+	 */
 	virtual int progress();
 
 private:
-	bool use_inject;
 	cm_resources &resources;
+
+	/* Whether to use inject to send the connect response message
+	   See more detailed comment in the constructor */
+	bool use_inject;
+
 	nccl_ofi_freelist_elem_t &send_elem;
 	fi_addr_t dest_addr;
 	std::function<void()> done_callback;

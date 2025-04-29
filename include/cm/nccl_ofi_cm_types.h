@@ -22,12 +22,9 @@ namespace nccl_ofi_cm
 	class cm_resources;
 }
 
-/* Struct types */
-typedef char ep_name[MAX_EP_ADDR];
-
-struct cm_ep_name {
-	ep_name name;
-	size_t name_len;
+struct cm_ep_addr {
+	char addr[MAX_EP_ADDR];
+	size_t addr_len;
 };
 
 /**
@@ -54,7 +51,7 @@ struct nccl_ofi_cm_conn_msg {
 
 	/* Endpoint used for connection establishment
 	   listener's ep is also transmitted in the handle */
-	cm_ep_name conn_ep_name;
+	cm_ep_addr conn_ep_name;
 
 	/* Transport data will be at the end of the conn msg */
 };

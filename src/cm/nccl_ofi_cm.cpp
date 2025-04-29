@@ -83,7 +83,7 @@ nccl_ofi_cm_receiver::nccl_ofi_cm_receiver(nccl_ofi_cm::cm_resources &_resources
 	user_conn_msg_data(resources.get_conn_msg_data_size()),
 	conn_resp_req(nullptr)
 {
-	dest_addr = resources.ep.av_insert_address(conn_msg.conn_ep_name.name);
+	dest_addr = resources.ep.av_insert_address(conn_msg.conn_ep_name.addr);
 	/* User data resides after the nccl_ofi_cm_conn_msg data */
 	const void *conn_msg_user_data = (&conn_msg + 1);
 	memcpy(user_conn_msg_data.data(), conn_msg_user_data, resources.get_conn_msg_data_size());
@@ -103,9 +103,9 @@ void nccl_ofi_cm_receiver::set_conn_resp_msg_data(const void *data)
 	conn_resp_msg.local_id = 0; /* Not used */
 	conn_resp_msg.remote_id = sender_id;
 
-	conn_resp_msg.conn_ep_name.name_len = MAX_EP_ADDR;
+	conn_resp_msg.conn_ep_name.addr_len = MAX_EP_ADDR;
 
-	resources.ep.get_ep_address(conn_resp_msg.conn_ep_name.name, conn_resp_msg.conn_ep_name.name_len);
+	resources.ep.get_ep_address(conn_resp_msg.conn_ep_name.addr, conn_resp_msg.conn_ep_name.addr_len);
 
 	/* Copy user data after conn resp msg */
 	memcpy(&conn_resp_msg + 1, data, resources.get_conn_msg_data_size());
@@ -172,9 +172,9 @@ nccl_ofi_cm_send_connector::nccl_ofi_cm_send_connector(nccl_ofi_cm::cm_resources
 	conn_msg.local_id = send_connector_id;
 	conn_msg.remote_id = handle.comm_id;
 
-	conn_msg.conn_ep_name.name_len = MAX_EP_ADDR;
+	conn_msg.conn_ep_name.addr_len = MAX_EP_ADDR;
 
-	resources.ep.get_ep_address(conn_msg.conn_ep_name.name, conn_msg.conn_ep_name.name_len);
+	resources.ep.get_ep_address(conn_msg.conn_ep_name.addr, conn_msg.conn_ep_name.addr_len);
 
 	/* Copy user data after conn resp msg */
 	memcpy(&conn_msg + 1, transport_connect_msg, resources.get_conn_msg_data_size());

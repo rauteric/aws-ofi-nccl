@@ -8,6 +8,9 @@
 # net plugin
 #
 sources = \
+	cm/nccl_ofi_cm.cpp \
+	cm/nccl_ofi_cm_resources.cpp \
+	cm/nccl_ofi_cm_reqs.cpp \
 	nccl_ofi_api.cpp \
 	nccl_ofi_compat.cpp \
 	nccl_ofi_net.cpp \
@@ -25,10 +28,7 @@ sources = \
 	nccl_ofi_dmabuf.cpp \
 	nccl_ofi_ep_addr_list.cpp \
 	nccl_ofi_param.cpp \
-	tracepoint.cpp \
-	cm/nccl_ofi_cm_comms.cpp \
-	cm/nccl_ofi_cm_reqs.cpp \
-	cm/nccl_ofi_cm.cpp
+	tracepoint.cpp
 
 if WANT_PLATFORM_AWS
 sources += platform-aws.cpp

@@ -28,13 +28,8 @@ public:
 	virtual int handle_completion() = 0;
 	virtual int progress() = 0;
 
-	/**
-	 * This abstract base class cannot be constructed, but one could try to
-	 * destruct it using a pointer to this base class. Since the destructor
-	 * is not virtual, prevent this by making the destructor protected.
-	 */
 protected:
-	~nccl_ofi_cm_req() = default;
+	virtual ~nccl_ofi_cm_req() = default;
 };
 
 /**
@@ -44,23 +39,19 @@ class nccl_ofi_cm_rx_req : public nccl_ofi_cm_req
 {
 public:
 	/**
-	 * Constructor. Frees the freelist elem back to the given cm.
+	 * Constructor. Allocates a rx buffer from buffer manager
 	 */
-	nccl_ofi_cm_rx_req(cm_resources &_resources) :
-		resources(_resources),
-		rx_elem(resources.buff_mgr.allocate_conn_msg())
-		{ }
+	nccl_ofi_cm_rx_req(cm_resources &_resources);
 
 	/**
 	 * Destructor. Frees the freelist elem.
 	 */
-	~nccl_ofi_cm_rx_req();
+	virtual ~nccl_ofi_cm_rx_req();
 
 	virtual int handle_completion();
 	virtual int progress();
 
 private:
-
 	cm_resources &resources;
 	nccl_ofi_freelist_elem_t &rx_elem;
 };
@@ -73,17 +64,12 @@ class nccl_ofi_cm_send_conn_req : public nccl_ofi_cm_req
 public:
 
 	nccl_ofi_cm_send_conn_req(cm_resources &_resources, fi_addr_t _dest_addr,
-				  std::function<void()> _done_callback) :
-		resources(_resources),
-		send_elem(resources.buff_mgr.allocate_conn_msg()),
-		dest_addr(_dest_addr),
-		done_callback(_done_callback)
-	{ }
+				  std::function<void()> _done_callback);
 
 	/**
 	 * Destructor. Frees the freelist elem.
 	 */
-	~nccl_ofi_cm_send_conn_req();
+	virtual ~nccl_ofi_cm_send_conn_req();
 
 	nccl_ofi_cm_conn_msg &get_conn_msg()
 	{
@@ -112,7 +98,7 @@ public:
 	/**
 	 * Destructor. Frees the freelist elem.
 	 */
-	~nccl_ofi_cm_send_conn_resp_req();
+	virtual ~nccl_ofi_cm_send_conn_resp_req();
 
 	nccl_ofi_cm_conn_msg &get_conn_resp_msg()
 	{

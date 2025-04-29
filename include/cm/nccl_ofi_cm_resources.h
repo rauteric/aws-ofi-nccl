@@ -6,10 +6,11 @@
 #define NCCL_OFI_CM_RESOURCES_H_
 
 #include <rdma/fabric.h>
+
+#include <deque>
 #include <unordered_map>
 
 #include "cm/nccl_ofi_cm_reqs.h"
-#include "cm/nccl_ofi_cm.h"
 
 #include "nccl_ofi_freelist.h"
 
@@ -107,7 +108,7 @@ public:
 
 	int process_pending_reqs();
 private:
-	std::deque<nccl_ofi_cm_req&> pending_reqs;
+	std::deque<nccl_ofi_cm_req *> pending_reqs;
 };
 
 class cm_resources
@@ -115,6 +116,10 @@ class cm_resources
 public:
 	/* Public members */
 	endpoint ep;
+private:
+	size_t conn_msg_data_size;
+
+public:
 	conn_msg_buffer_manager buff_mgr;
 	connector_id_map<nccl_ofi_cm_listener> listener_map;
 	connector_id_map<nccl_ofi_cm_send_connector> send_connector_map;
@@ -132,11 +137,49 @@ public:
 	size_t get_conn_msg_data_size() { return conn_msg_data_size; }
 	size_t get_conn_msg_size() { return sizeof(nccl_ofi_cm_conn_msg) + conn_msg_data_size; }
 
-private:
-	size_t conn_msg_data_size;
 	uint64_t next_connector_id;
 	std::vector<nccl_ofi_cm_rx_req *> rx_reqs;
 };
+
+
+/**
+ * Define templated member functions
+ */
+
+template <typename T>
+void connector_id_map<T>::insert_connector(uint64_t id, T& connector)
+{
+	auto result = map.emplace(id, connector);
+	if (result.second == false) {
+		NCCL_OFI_WARN("Attempt to insert duplicate id");
+		throw std::runtime_error("duplicate id insert");
+	}
+}
+
+
+template <typename T>
+T& connector_id_map<T>::get_connector(uint64_t id)
+{
+	auto result = map.find(id);
+
+	if (result == map.end()) {
+		NCCL_OFI_WARN("Lookup of invalid id");
+		throw std::runtime_error("invalid id lookup");
+	}
+
+	return result->second;
+}
+
+
+template <typename T>
+void connector_id_map<T>::remove_connector(uint64_t id)
+{
+	size_t n_removed = map.erase(id);
+	if (n_removed != 1) {
+		NCCL_OFI_WARN("Failed to remove connector id: %lu", id);
+		throw std::runtime_error("id removal fail");
+	}
+}
 
 }
 

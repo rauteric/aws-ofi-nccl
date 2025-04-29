@@ -68,6 +68,12 @@ nccl_ofi_cm_req::nccl_ofi_cm_req()
 }
 
 
+nccl_ofi_cm_rx_req::nccl_ofi_cm_rx_req(cm_resources &_resources) :
+	resources(_resources),
+	rx_elem(resources.buff_mgr.allocate_conn_msg())
+{ }
+
+
 nccl_ofi_cm_rx_req::~nccl_ofi_cm_rx_req()
 {
 	resources.buff_mgr.free_conn_msg(rx_elem);
@@ -76,6 +82,23 @@ nccl_ofi_cm_rx_req::~nccl_ofi_cm_rx_req()
 int nccl_ofi_cm_rx_req::progress()
 {
 	return resources.ep.post_recv(rx_elem, resources.get_conn_msg_size(), *this);
+}
+
+
+nccl_ofi_cm_send_conn_req::nccl_ofi_cm_send_conn_req(cm_resources &_resources, fi_addr_t _dest_addr,
+				std::function<void()> _done_callback) :
+	resources(_resources),
+	send_elem(resources.buff_mgr.allocate_conn_msg()),
+	dest_addr(_dest_addr),
+	done_callback(_done_callback)
+{ }
+
+/**
+ * Destructor. Frees the freelist elem.
+ */
+nccl_ofi_cm_send_conn_req::~nccl_ofi_cm_send_conn_req()
+{
+	resources.buff_mgr.free_conn_msg(send_elem);
 }
 
 

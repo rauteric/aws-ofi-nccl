@@ -88,50 +88,16 @@ void conn_msg_buffer_manager::free_conn_msg(nccl_ofi_freelist_elem_t &conn_msg)
 }
 
 
-template <typename T>
-void connector_id_map<T>::insert_connector(uint64_t id, T& connector)
-{
-	auto result = map.emplace(id, connector);
-	if (result.second == false) {
-		NCCL_OFI_WARN("Attempt to insert duplicate id");
-		throw std::runtime_error("duplicate id insert");
-	}
-}
-
-
-template <typename T>
-T& connector_id_map<T>::get_connector(uint64_t id)
-{
-	auto result = map.find(id);
-
-	if (result == map.end()) {
-		NCCL_OFI_WARN("Lookup of invalid id");
-		throw std::runtime_error("invalid id lookup");
-	}
-}
-
-
-template <typename T>
-void connector_id_map<T>::remove_connector(uint64_t id)
-{
-	size_t n_removed = map.erase(id);
-	if (n_removed != 1) {
-		NCCL_OFI_WARN("Failed to remove connector id: %lu", id);
-		throw std::runtime_error("id removal fail");
-	}
-}
-
-
 void pending_requests_queue::add_req(nccl_ofi_cm_req &req)
 {
-	pending_reqs.push_back(req);
+	pending_reqs.push_back(&req);
 }
 
 
 int pending_requests_queue::process_pending_reqs()
 {
 	for (auto it = pending_reqs.begin(); it != pending_reqs.end(); ) {
-		nccl_ofi_cm_req &req = *it;
+		nccl_ofi_cm_req &req = *(*it);
 
 		int ret = req.progress();
 		if (ret == -FI_EAGAIN) {
@@ -151,14 +117,13 @@ int pending_requests_queue::process_pending_reqs()
 cm_resources::cm_resources(fi_info *info, fid_domain *domain, fid_cq *cq,
 			   nccl_ofi_idpool_t &mr_key_pool, size_t _conn_msg_data_size) :
 	ep(info, domain, mr_key_pool, cq),
-	buff_mgr(ep, sizeof(nccl_ofi_cm_conn_msg) + conn_msg_data_size),
+	conn_msg_data_size(_conn_msg_data_size),
+	buff_mgr(ep, get_conn_msg_size()),
 	listener_map(),
 	send_connector_map(),
 	pending_reqs_queue(),
-	rx_reqs(),
-
-	conn_msg_data_size(_conn_msg_data_size),
-	next_connector_id(0)
+	next_connector_id(0),
+	rx_reqs()
 {
 	/* TODO make param */
 	const size_t num_rx_reqs = 1;

@@ -5,6 +5,10 @@
 #
 
 noinst_HEADERS = \
+	cm/nccl_ofi_cm_reqs.h \
+	cm/nccl_ofi_cm_resources.h \
+	cm/nccl_ofi_cm_types.h \
+	cm/nccl_ofi_cm.h \
 	nccl_ofi.h \
 	nccl_ofi_api.h \
 	nccl_ofi_config_bottom.h \
@@ -40,9 +44,4 @@ noinst_HEADERS = \
 	nccl_ofi_ep_addr_list.h \
 	platform-aws.h \
 	stats/histogram.h \
-	stats/histogram_binner.h \
-	cm/nccl_ofi_cm_comms.h \
-	cm/nccl_ofi_cm_mr.h \
-	cm/nccl_ofi_cm_reqs.h \
-	cm/nccl_ofi_cm_types.h \
-	cm/nccl_ofi_cm.h
+	stats/histogram_binner.h

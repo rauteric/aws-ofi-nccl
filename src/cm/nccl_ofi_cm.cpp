@@ -158,7 +158,7 @@ nccl_ofi_cm_send_connector::nccl_ofi_cm_send_connector(nccl_ofi_cm::cm_resources
 {
 	resources.send_connector_map.insert_connector(send_connector_id, *this);
 
-	fi_addr_t dest_addr = resources.ep.av_insert_address(handle.ep_name);
+	dest_addr = resources.ep.av_insert_address(handle.ep_name);
 
 	send_conn_req = new nccl_ofi_cm::nccl_ofi_cm_send_conn_req(
 		resources, dest_addr,

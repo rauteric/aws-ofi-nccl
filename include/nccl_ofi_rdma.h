@@ -84,21 +84,11 @@ typedef enum nccl_net_ofi_rdma_req_type {
 	NCCL_OFI_RDMA_EAGER_RX_BUFF,
 	/* Flush request */
 	NCCL_OFI_RDMA_FLUSH,
-	/* Connect message send request */
-	NCCL_OFI_RDMA_SEND_CONN,
-	/* Connect message receive request */
-	NCCL_OFI_RDMA_RECV_CONN,
-	/* Connect response message receive request */
-	NCCL_OFI_RDMA_RECV_CONN_RESP,
-	/* Connect response message send request */
-	NCCL_OFI_RDMA_SEND_CONN_RESP,
 	/* Invalid type */
 	NCCL_OFI_RDMA_INVALID_TYPE,
 } nccl_net_ofi_rdma_req_type_t;
 
 enum nccl_ofi_rdma_msg_type {
-	NCCL_OFI_RDMA_MSG_CONN = 0,
-	NCCL_OFI_RDMA_MSG_CONN_RESP,
 	NCCL_OFI_RDMA_MSG_CTRL,
 	NCCL_OFI_RDMA_MSG_EAGER,
 	NCCL_OFI_RDMA_MSG_CLOSE,

@@ -200,6 +200,30 @@ static int sendrecv_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 }
 
 
+/**
+ * Handle completions for receive control messages.
+ *
+ * Handle completions for receive control messages (needed to create an rcomm).
+ * The send-side control message request does not require special handling and
+ * so just uses sendrecv_req_handle_cq_entry.
+ */
+static int sendrecv_req_handle_control_cq_entry(nccl_net_ofi_context_t *ctx,
+						struct fi_cq_entry *cq_entry_base,
+						uint16_t rail_id)
+{
+	nccl_net_ofi_sendrecv_req_t *req = container_of(ctx, nccl_net_ofi_sendrecv_req_t, ctx);
+
+	/* Mark listen_comm to accepted state */
+	assert((reinterpret_cast<struct fi_cq_tagged_entry *>(cq_entry_base))->flags & FI_RECV);
+	assert(req->comm->type == NCCL_NET_OFI_LISTEN_COMM);
+	nccl_net_ofi_sendrecv_listen_comm_t *l_comm =
+		reinterpret_cast<nccl_net_ofi_sendrecv_listen_comm_t *>(req->comm);
+	l_comm->accepted = true;
+
+	return sendrecv_req_handle_cq_entry(ctx, cq_entry_base, rail_id);
+}
+
+
 static int sendrecv_req_handle_error_entry(nccl_net_ofi_context_t *ctx,
 					   struct fid_cq *cq,
 					   struct fi_cq_err_entry *err_entry,
@@ -504,11 +528,85 @@ static int sendrecv_req_test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 }
 
 
+/*
+ * @brief	Allocate a request to receive peer connection message
+ *
+ * @param	Valid listen communicator object
+ *
+ * @return	NCCL OFI request, on success
+ * 		NULL, on error
+ */
+static nccl_net_ofi_sendrecv_req_t *sendrecv_recv_req_prepare(nccl_net_ofi_sendrecv_listen_comm_t *l_comm)
+{
+	nccl_net_ofi_sendrecv_req_t *req = NULL;
+
+	/* Allocate a NCCL OFI request */
+	req = (nccl_net_ofi_sendrecv_req_t *)calloc(1, sizeof(nccl_net_ofi_sendrecv_req_t));
+	if (OFI_UNLIKELY(req == NULL)) {
+		NCCL_OFI_WARN("Unable to allocate nccl_ofi_req_t");
+		return NULL;
+	}
+
+	req->base.test = sendrecv_req_test;
+	req->ctx.handle_cq_entry = sendrecv_req_handle_control_cq_entry;
+	req->ctx.handle_error_entry = sendrecv_req_handle_error_entry;
+	req->state = NCCL_OFI_SENDRECV_REQ_CREATED;
+	req->comm = &l_comm->base.base;
+	req->dev_id = l_comm->base.base.dev_id;
+
+	return req;
+}
+
+
 typedef struct {
 	nccl_net_ofi_sendrecv_mr_handle_t *mr_handle;
 	nccl_ofi_idpool_t *key_pool;
 } sendrecv_freelist_mr_handle_t;
 
+
+/*
+ * @brief	Post a request to receive peer connection message
+ *
+ * @param	listen communicator object, contains the local EP and device information
+ * 		buffer, to receive connection message
+ * 		NCCL OFI receive request
+ *
+ * @return	0, on successful posting of receive request
+ * 		-FI_EAGAIN, on lack of provider resources to post receive request
+ * 		error, others
+ */
+static int sendrecv_recv_conn_post(nccl_net_ofi_sendrecv_listen_comm_t *l_comm,
+				   nccl_net_ofi_sendrecv_ep_t *ep,
+				   void *buffer,
+				   size_t size,
+				   nccl_net_ofi_sendrecv_req_t *req)
+{
+	ssize_t rc = 0;
+	int ret = 0;
+	int dev_id = l_comm->base.base.dev_id;
+	auto *mr_handle = 
+		reinterpret_cast<sendrecv_freelist_mr_handle_t *>(l_comm->conn_info->mr_handle)->mr_handle;
+	void *desc = fi_mr_desc(mr_handle->mr);
+
+	/* Post a buffer for receiving connection requests */
+	rc = fi_trecv(l_comm->local_ep, buffer, size,
+		      desc, FI_ADDR_UNSPEC, l_comm->tag | (ep->max_tag + 1),
+		      0, sendrecv_req_get_ofi_context(req));
+	if (rc == -FI_EAGAIN) {
+		/*
+		 * Process completions so that you have enough
+		 * resources for posting receive buffer
+		 */
+		ret = sendrecv_cq_process(ep->cq);
+		if (OFI_UNLIKELY(ret != 0))
+			return ret;
+	}
+	else if (rc != 0)
+		NCCL_OFI_WARN("Unable to post a buffer for receving connections for dev %d. RC: %zd, ERROR: %s",
+			      dev_id, rc, fi_strerror(-rc));
+
+	return rc;
+}
 
 /*
  * @brief	Returns the domain, dependent on the platform.
@@ -973,7 +1071,6 @@ static int sendrecv_recv_comm_recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, v
 				   int *sizes, int *tags, nccl_net_ofi_mr_handle_t **mhandles,
 				   nccl_net_ofi_req_t **base_req)
 {
-	/*TODO */ abort();
 	int ret = 0;
 	ssize_t rc = 0;
 	nccl_net_ofi_sendrecv_req_t *req = NULL;
@@ -1349,7 +1446,6 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 								     nccl_net_ofi_sendrecv_device_t *device,
 								     nccl_net_ofi_sendrecv_domain_t *domain,
 								     nccl_net_ofi_sendrecv_ep_t *ep,
-								     nccl_ofi_cm_r_comm *cm_r_comm,
 								     char *remote_ep_addr)
 {
 	int ret = 0;
@@ -1361,7 +1457,6 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 	int dev_id = device->base.dev_id;
 
 	/* Insert remote EP address to AV */
-	printf("Remote ep addr 2: %s", remote_ep_addr);
 	ret = fi_av_insert(ep->av, (void *)remote_ep_addr, 1,
 			   &remote_ep, 0, NULL);
 	if (OFI_UNLIKELY(ret != 1)) {
@@ -1389,7 +1484,7 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 	r_comm->base.flush = sendrecv_recv_comm_flush;
 	r_comm->base.close = sendrecv_recv_comm_close;
 	r_comm->base.read = NULL;
-	r_comm->tag = cm_r_comm->get_comm_id();
+	r_comm->tag = l_comm->tag;
 	r_comm->local_ep = l_comm->local_ep;
 	r_comm->local_ep_addr = l_comm->local_ep_addr;
 	r_comm->remote_ep = remote_ep;
@@ -1433,8 +1528,6 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	nccl_net_ofi_sendrecv_listen_comm_t *l_comm =
 		(nccl_net_ofi_sendrecv_listen_comm_t *)listen_comm;
 
-	nccl_ofi_cm_r_comm *cm_r_comm = nullptr;
-
 	if (l_comm->state.stage != COMM_CONN_REQ_PENDING && l_comm->accepted) {
 		NCCL_OFI_WARN("listen_comm %p object already has an active connection (%d).",
 			      listen_comm, l_comm->accepted);
@@ -1446,6 +1539,7 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	/* Extract communicator state from listen communicator object */
 	save_comm_state_t *comm_state = &l_comm->state;
 	nccl_net_ofi_sendrecv_recv_comm_t *r_comm;
+	nccl_net_ofi_sendrecv_req_t *req = (nccl_net_ofi_sendrecv_req_t *)comm_state->req;
 
 	/* Retrieve and validate endpoint */
 	nccl_net_ofi_sendrecv_ep_t *ep =
@@ -1467,6 +1561,11 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		ret = -EINVAL;
 		NCCL_OFI_WARN("Invalid device provided");
 		return ret;
+	}
+
+	nccl_ofi_connection_info_t *conn_info = NULL;
+	if (l_comm->conn_info != NULL) {
+		conn_info = (nccl_ofi_connection_info_t *)l_comm->conn_info->ptr;
 	}
 	
 	/*
@@ -1493,9 +1592,40 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		ep->base.ref_cnt++;
 		nccl_net_ofi_mutex_unlock(&(domain->base.domain_lock));
 
+		/* Prepare receive request to accept connections */
+		req = sendrecv_recv_req_prepare(l_comm);
+		if (req == NULL) {
+			return -ENOMEM;
+		}
+
 		comm_state->stage = COMM_RECV_CONN;
 		fallthrough;
 	case COMM_RECV_CONN:
+
+		/* Allocate memory for peer address for the first time ONLY */
+		if (l_comm->conn_info == NULL) {
+			l_comm->conn_info = nccl_ofi_freelist_entry_alloc(ep->conn_msg_fl);
+			if (l_comm->conn_info == NULL) {
+				NCCL_OFI_WARN("Failed to allocate connection info entry");
+				free(req);
+				return -ENOMEM;
+			}
+			conn_info = (nccl_ofi_connection_info_t *)l_comm->conn_info->ptr;
+		}
+
+		/* Post a receive message to receive peer connections */
+		ret = sendrecv_recv_conn_post(l_comm, ep, conn_info,
+			sizeof(nccl_ofi_connection_info_t), req);
+		if (ret == -FI_EAGAIN) {
+			/* Save recv request and buffer address for retry */
+			comm_state->req = &req->base;
+			return 0;
+		} else if (ret != 0) {
+			free(req);
+			nccl_ofi_freelist_entry_free(ep->conn_msg_fl, l_comm->conn_info);
+			l_comm->conn_info = NULL;
+			return ret;
+		}
 
 		comm_state->stage = COMM_CONN_REQ_PENDING;
 
@@ -1505,14 +1635,32 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		/* Progress NCCL OFI engine so that connection is accepted */
 		ret = sendrecv_cq_process(ep->cq);
 		if (OFI_UNLIKELY(ret != 0)) {
+			free(req);
 			return ret;
 		}
 
-		cm_r_comm = l_comm->cm_l_comm->accept();
-		if (!cm_r_comm) {
+		if (l_comm->accepted != true) {
+			/* Save recv request and buffer to retest completion */
+			comm_state->req = &req->base;
 			return 0;
 		}
 
+		if (OFI_UNLIKELY(conn_info == NULL)) {
+			NCCL_OFI_WARN("conn_info unexpectedly NULL in COMM_CONN_REQ_PENDING");
+			return -EINVAL;
+		}
+
+		if (conn_info->connect_to_self) {
+			NCCL_OFI_TRACE(NCCL_NET, "Accept from self; cleaning up");
+			nccl_net_ofi_sendrecv_req_t *conn_info_req =
+				(nccl_net_ofi_sendrecv_req_t *)conn_info->req;
+			if (conn_info_req->state != NCCL_OFI_SENDRECV_REQ_COMPLETED) {
+				return 0;
+			}
+		}
+
+		/* Done processing the request so free it */
+		free(req);
 		comm_state->stage = COMM_CONNECTED;
 
 		break;
@@ -1526,24 +1674,14 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		return -EINVAL;
 	}
 
-	nccl_ofi_cm_ep_rail_info recv_rails = cm_r_comm->get_sender_ep_rails();
-	if (recv_rails.control_ep_names.size() != 0 ||
-	    recv_rails.ep_names.size() != 1) {
-		NCCL_OFI_WARN("Received invalid rails from receiver");
-		return -EINVAL;
-	}
-
-	printf("Remote ep addr 1: %s", recv_rails.ep_names[0].name);
-
 	/* Prepare receive communicator object for the received peer connection */
-	r_comm = sendrecv_recv_comm_prepare(l_comm, device, domain, ep, cm_r_comm,
-					    recv_rails.ep_names[0].name);
-
-	delete cm_r_comm;
-
+	r_comm = sendrecv_recv_comm_prepare(l_comm, device, domain, ep, conn_info->ep_name);
 	if (OFI_UNLIKELY(r_comm == NULL)) {
 		return -ENOMEM;
 	}
+
+	nccl_ofi_freelist_entry_free(ep->conn_msg_fl, l_comm->conn_info);
+	l_comm->conn_info = NULL;
 
 	comm_state->comm = &r_comm->base.base;
 	*recv_comm = &r_comm->base;
@@ -1553,7 +1691,6 @@ static int sendrecv_listen_comm_accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 static int sendrecv_listen_comm_close(nccl_net_ofi_listen_comm_t *listen_comm)
 {
-	assert(false); abort(); /* TODO */
 	nccl_net_ofi_sendrecv_listen_comm_t *l_comm =
 		(nccl_net_ofi_sendrecv_listen_comm_t *)listen_comm;
 	int ret = 0;
@@ -1611,6 +1748,7 @@ static int sendrecv_endpoint_listen(nccl_net_ofi_ep_t *base_ep,
 	char *local_ep_name = NULL;
 	fi_addr_t local_ep_addr;
 	nccl_net_ofi_sendrecv_listen_comm_t *l_comm = NULL;
+	uint64_t tag;
 	int dev_id = 0;
 	int num_addrs;
 	nccl_net_ofi_sendrecv_ep_t *ep =
@@ -1625,10 +1763,27 @@ static int sendrecv_endpoint_listen(nccl_net_ofi_ep_t *base_ep,
 
 	dev_id = device->base.dev_id;
 
+	/* Zero-out the handle */
+	memset(handle, 0, sizeof(nccl_net_ofi_conn_handle_t));
+
+	/* Increase tag ID */
+	if (ep->tag + 1 >=
+	    device->max_tag) {
+		NCCL_OFI_WARN("Cannot open more connection for device ID %d."
+			      " Maximum is %ld",
+			      dev_id, device->max_tag);
+		return -ENOSPC;
+	}
+	tag = ++ep->tag;
+
+	/* Build handle */
 	local_ep_name = sendrecv_get_local_address(ep->ofi_ep);
 	if (local_ep_name == NULL) {
 		return -EINVAL;
 	}
+
+	memcpy(handle->ep_name, local_ep_name, MAX_EP_ADDR);
+	handle->comm_id = (uint32_t)tag;
 
 	/* Insert local EP address to AV. This will be used to issue local read operations */
 	num_addrs = fi_av_insert(ep->av, (void *)local_ep_name, 1,
@@ -1655,12 +1810,10 @@ static int sendrecv_endpoint_listen(nccl_net_ofi_ep_t *base_ep,
 	l_comm->base.base.dev_id = dev_id;
 	l_comm->base.accept = sendrecv_listen_comm_accept;
 	l_comm->base.close = sendrecv_listen_comm_close;
+	l_comm->tag = tag;
 	l_comm->local_ep = ep->ofi_ep;
 	l_comm->accepted = false;
 	l_comm->local_ep_addr = local_ep_addr;
-
-	l_comm->cm_l_comm = ep->cm->listen();
-	*handle = l_comm->cm_l_comm->get_handle();
 
 	*listen_comm = (nccl_net_ofi_listen_comm_t *)l_comm;
 	return 0;
@@ -1696,7 +1849,6 @@ static int sendrecv_send_comm_dereg_mr(nccl_net_ofi_send_comm_t *send_comm,
 static int sendrecv_send_comm_send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int tag,
 				   nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req_t **base_req)
 {
-	/* TODO */ abort();
 	int ret = 0;
 	nccl_net_ofi_sendrecv_send_comm_t *s_comm =
 		(nccl_net_ofi_sendrecv_send_comm_t *)send_comm;
@@ -1855,8 +2007,13 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 					    nccl_net_ofi_sendrecv_ep_t *ep,
 					    nccl_net_ofi_sendrecv_send_comm_t **s_comm)
 {
+	char remote_ep_addr[MAX_EP_ADDR] = {};
+	uint64_t tag = 0ULL;
+	uint64_t max_tag = 0;
 	size_t req_size = sizeof(nccl_net_ofi_sendrecv_req_t);
+	fi_addr_t remote_addr;
 	nccl_net_ofi_sendrecv_send_comm_t *ret_s_comm = NULL;
+	nccl_ofi_connection_info_t *conn_info = NULL;
 	*s_comm = NULL;
 	int ret = 0;
 
@@ -1864,6 +2021,27 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 	nccl_net_ofi_sendrecv_device_t *device = sendrecv_endpoint_get_device(ep);
 	if (OFI_UNLIKELY(device == NULL)) {
 		NCCL_OFI_WARN("Error accessing device.");
+		return -EINVAL;
+	}
+
+	max_tag = device->max_tag;
+
+	/* Get tag and remote name from handle */
+	memcpy(&remote_ep_addr, handle->ep_name, MAX_EP_ADDR);
+	memcpy(&tag, &handle->comm_id, sizeof(handle->comm_id));
+	if (tag < 1 || tag > max_tag) {
+		NCCL_OFI_WARN("Received an invalid tag %lu for device %d", tag,
+			      device->base.dev_id);
+		return -EINVAL;
+	}
+
+	/* Insert remote address into AV */
+	ret = fi_av_insert(ep->av,
+			   (void *)remote_ep_addr, 1,
+			   &remote_addr, 0, NULL);
+	if (OFI_UNLIKELY(ret != 1)) {
+		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %d",
+			      device->base.dev_id, ret);
 		return -EINVAL;
 	}
 
@@ -1884,11 +2062,36 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->base.close = sendrecv_send_comm_close;
 	ret_s_comm->base.write = NULL;
 	ret_s_comm->base.write_inline = NULL;
-	ret_s_comm->tag = 0UL /* TODO */;
+	ret_s_comm->tag = tag;
 	ret_s_comm->local_ep = ep->ofi_ep;
-	ret_s_comm->remote_ep = 0UL;
+	ret_s_comm->remote_ep = remote_addr;
 
-	ret_s_comm->conn_info = nullptr;
+	ret_s_comm->conn_info = nccl_ofi_freelist_entry_alloc(ep->conn_msg_fl);
+	if (ret_s_comm->conn_info == NULL) {
+		NCCL_OFI_WARN("Could not allocate connect connection info");
+		ret = -ENOMEM;
+		goto out;
+	}
+	
+	conn_info = (nccl_ofi_connection_info_t *)ret_s_comm->conn_info->ptr;
+
+	conn_info->ep_namelen = sizeof(conn_info->ep_name);
+
+	ret = fi_getname(&(ep->ofi_ep->fid),
+			 (void *)conn_info->ep_name,
+			 &conn_info->ep_namelen);
+	if (ret == -FI_ETOOSMALL) {
+		NCCL_OFI_WARN("Endpoint's address length (%zu) is larger than supplied buffer length (%d)",
+			      conn_info->ep_namelen, MAX_EP_ADDR);
+		goto out;
+	} else if (ret != 0) {
+		NCCL_OFI_WARN("Call to fi_getname() failed with RC: %d, ERROR: %s",
+			      ret, fi_strerror(-ret));
+		goto out;
+	}
+
+	conn_info->connect_to_self =
+		(0 == memcmp(conn_info->ep_name, remote_ep_addr, conn_info->ep_namelen)) ? 1 : 0;
 
 	/* Pre-allocated buffers for data path */
 	ret = nccl_ofi_freelist_init(req_size, 16, 16, NCCL_OFI_MAX_SEND_REQUESTS,
@@ -1938,28 +2141,74 @@ static inline nccl_net_ofi_sendrecv_req_t *sendrecv_send_comm_prepare_send_req(n
 	return req;
 }
 
+/*
+ * @brief	Send connect request to send communicator's peer
+ *
+ * @param	Valid send communicator object
+ * 		NCCL OFI request
+ *
+ * @return	0, on successfully sending message
+ * 		-1, on failure to get local EP address
+ * 		-FI_EAGAIN, on lack of provider resources to send message
+ * 		others, on error
+ */
+static ssize_t sendrecv_send_comm_send_connect_message(nccl_net_ofi_sendrecv_send_comm_t *s_comm,
+						       nccl_net_ofi_sendrecv_device_t *device,
+						       nccl_net_ofi_sendrecv_ep_t *ep,
+						       nccl_net_ofi_sendrecv_req_t *req)
+{
+	ssize_t rc = 0;
+	uint64_t max_tag = device->max_tag;
+	nccl_ofi_connection_info_t *conn_info = (nccl_ofi_connection_info_t *)s_comm->conn_info->ptr;
+	auto *mr_handle = static_cast<sendrecv_freelist_mr_handle_t *>(s_comm->conn_info->mr_handle)->mr_handle;
+	void *desc = fi_mr_desc(mr_handle->mr);
+
+	/* If connecting to self, pass along the send req so that the
+	   accept side can clean up the request */
+	conn_info->req = (conn_info->connect_to_self == 1) ? &req->base : NULL;
+
+	rc = fi_tsend(s_comm->local_ep, (void *)conn_info,
+		      sizeof(*conn_info), desc, s_comm->remote_ep,
+		      s_comm->tag | (max_tag + 1), sendrecv_req_get_ofi_context(req));
+
+	if (rc == -FI_EAGAIN) {
+		/*
+		 * Process completions so that you have enough
+		 * resources for sending connect message
+		 */
+		int res = sendrecv_cq_process(ep->cq);
+		if (res != 0)
+			return res;
+	} else if (rc != 0) {
+		NCCL_OFI_WARN("Unable to send connect message for dev %d. RC: %zd, ERROR: %s",
+			      device->base.dev_id, rc, fi_strerror(-rc));
+	}
+
+	return rc;
+}
 
 static int sendrecv_endpoint_connect(nccl_net_ofi_ep_t *base_ep,
 				     nccl_net_ofi_conn_handle_t *handle,
 				     nccl_net_ofi_send_comm_t **send_comm)
 {
 	int ret = 0;
+	ssize_t rc = 0;
 	*send_comm = NULL;
 	nccl_net_ofi_sendrecv_ep_t *ep =
 		(nccl_net_ofi_sendrecv_ep_t *)base_ep;
-
-	nccl_ofi_cm_ep_rail_info rail_info;
-	cm_ep_name name = { };
-
+	nccl_ofi_connection_info_t *conn_info = NULL;
+	
 	/* Retrieve and validate devices */
 	nccl_net_ofi_sendrecv_device_t *device = sendrecv_endpoint_get_device(ep);
 	if (OFI_UNLIKELY(device == NULL)) {
 		NCCL_OFI_WARN("Error accessing devices array. Devices array has not been initialized.");
 		return -EINVAL;
 	}
+	int dev_id = device->base.dev_id;
 
 	/* Extract connection state of the communicator */
 	save_comm_state_t *comm_state = &(handle->state);
+	nccl_net_ofi_sendrecv_req_t *req = (nccl_net_ofi_sendrecv_req_t *)comm_state->req;
 	nccl_net_ofi_sendrecv_send_comm_t *s_comm =
 		(nccl_net_ofi_sendrecv_send_comm_t *)comm_state->comm;
 
@@ -1985,42 +2234,64 @@ static int sendrecv_endpoint_connect(nccl_net_ofi_ep_t *base_ep,
 			return ret;
 		}
 
-		name.name_len = MAX_EP_ADDR;
-		ret = fi_getname(&(ep->ofi_ep->fid),
-				 (void *)name.name,
-				 &name.name_len);
-		if (ret != 0) {
-			NCCL_OFI_WARN("Failed call to fi_getname");
-			abort();
+		/* Prepare connect request to be sent to peer */
+		req = sendrecv_send_comm_prepare_send_req(s_comm);
+		if (OFI_UNLIKELY(req == NULL)) {
+			free(s_comm);
+			return -ENOMEM;
 		}
-		rail_info.ep_names.push_back(name);
-		s_comm->cm_s_comm = ep->cm->connect(handle, rail_info);
 
 		comm_state->stage = COMM_SEND_CONN;
 
 		fallthrough;
-	case COMM_SEND_CONN: {
+	case COMM_SEND_CONN:
 		/* Send "connect" message to remote EP */
-		bool ready = false;
-		while (!ready) {
-			ret = s_comm->cm_s_comm->test_ready(&ready);
-			if (ret != 0) {
-				/* TODO */
-				abort();
-			}
+		rc = sendrecv_send_comm_send_connect_message(s_comm, device, ep, req);
+		if (rc == -FI_EAGAIN) {
+			/* Save connection state */
+			comm_state->comm = &s_comm->base.base;
+			comm_state->req = &req->base;
+			return 0;
+		}
+		else if (rc != 0) {
+			sendrecv_send_comm_free_req(s_comm, dev_id, req, false);
+			free(s_comm);
+			return rc;
+		}
 
-			/* Progress our engine to get completions */
-			ret = sendrecv_cq_process(ep->cq);
-			if (OFI_UNLIKELY(ret != 0)) {
-				free(s_comm);
-				return ret;
-			}
+		comm_state->stage = COMM_CONN_REQ_PENDING;
+		fallthrough;
+	case COMM_CONN_REQ_PENDING:
+		conn_info = (nccl_ofi_connection_info_t *)s_comm->conn_info->ptr;
+		if (conn_info->connect_to_self == 1) {
+			NCCL_OFI_TRACE(NCCL_NET, "Connect to self; short circuit cleanup");
+			/* short cut to avoid rendezvous
+			   deadlock in GDR detection */
+			comm_state->stage = COMM_CONNECTED;
+			break;
+		}
+
+		/* Progress our engine to get completions */
+		ret = sendrecv_cq_process(ep->cq);
+		if (OFI_UNLIKELY(ret != 0)) {
+			assert((nccl_net_ofi_comm_t *)s_comm == req->comm);
+			sendrecv_send_comm_free_req(s_comm, dev_id, req, false);
+			free(s_comm);
+			return ret;
+		}
+
+		/* Check if the connect message is sent */
+		if (req->state != NCCL_OFI_SENDRECV_REQ_COMPLETED) {
+			/* Save connection state */
+			comm_state->comm = &s_comm->base.base;
+			comm_state->req = &req->base;
+			return 0;
 		}
 
 		comm_state->stage = COMM_CONNECTED;
+
 		break;
-	}
-	case COMM_CONN_REQ_PENDING:
+
 	case COMM_RECV_CONN:
 	case COMM_CONN_RESP_REQ_PENDING:
 	case COMM_CONNECTED:
@@ -2029,32 +2300,14 @@ static int sendrecv_endpoint_connect(nccl_net_ofi_ep_t *base_ep,
 		return -EINVAL;
 	};
 
-	/* Add the destination rail to the AV */
-	nccl_ofi_cm_ep_rail_info recv_rails = s_comm->cm_s_comm->get_receiver_ep_rails();
-
-	if (recv_rails.control_ep_names.size() != 0 ||
-	    recv_rails.ep_names.size() != 1) {
-		NCCL_OFI_WARN("Invalid receiver rail info");
-		abort();
-	}
-
-	s_comm->tag = s_comm->cm_s_comm->get_comm_id();
-
-	delete s_comm->cm_s_comm;
-	s_comm->cm_s_comm = nullptr;
-
-	/* Insert remote address into AV */
-	ret = fi_av_insert(ep->av,
-				(void *)recv_rails.ep_names[0].name, 1,
-				&s_comm->remote_ep, 0, NULL);
-	if (OFI_UNLIKELY(ret != 1)) {
-		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %d",
-				device->base.dev_id, ret);
-		return -EINVAL;
-	}
-	ret = 0;
-
 	*send_comm = &s_comm->base;
+	assert((nccl_net_ofi_comm_t *)s_comm == req->comm);
+	conn_info = (nccl_ofi_connection_info_t *)s_comm->conn_info->ptr;
+	if (conn_info->connect_to_self != 1) {
+		sendrecv_send_comm_free_req(s_comm, dev_id, req, false);
+		nccl_ofi_freelist_entry_free(ep->conn_msg_fl, s_comm->conn_info);
+		s_comm->conn_info = NULL;
+	}
 
 	return ret;
 }
@@ -2082,8 +2335,6 @@ static int nccl_net_ofi_sendrecv_endpoint_free(nccl_net_ofi_ep_t *base_ep)
 		goto exit;
 	}
 
-	delete ep->cm;
-
 	ret = nccl_ofi_freelist_fini(ep->conn_msg_fl);
 	if (ret != 0) {
 		NCCL_OFI_WARN("nccl_ofi_freelist_fini failed: %d", ret);
@@ -2099,33 +2350,6 @@ static int nccl_net_ofi_sendrecv_endpoint_free(nccl_net_ofi_ep_t *base_ep)
 
  exit:
 	return ret;
-}
-
-
-/**
- * This function is simple for SENDRECV, since it doesn't support endpoint-per-comm.
- *
- * Just return the input endpoint's address
- */
-static inline nccl_ofi_cm_ep_rail_info sendrecv_select_rails
-	(const nccl_ofi_cm_ep_rail_info &sender_rails, void *ep_void_ptr, void **opaque_output)
-{
-	auto ep = static_cast<nccl_net_ofi_sendrecv_ep_t *>(ep_void_ptr);
-
-	char *ep_addr = sendrecv_get_local_address(ep->ofi_ep);
-	if (ep_addr == NULL) {
-		throw std::runtime_error("Failed to get local address");
-	}
-
-	cm_ep_name _cm_ep_name;
-	memcpy(_cm_ep_name.name, ep_addr, MAX_EP_ADDR);
-	_cm_ep_name.name_len = MAX_EP_ADDR;
-	free(ep_addr);
-
-	nccl_ofi_cm_ep_rail_info rail_info{ {}, {_cm_ep_name} };
-
-	*opaque_output = nullptr;
-	return rail_info;
 }
 
 
@@ -2187,15 +2411,7 @@ static int nccl_net_ofi_sendrecv_domain_create_endpoint(nccl_net_ofi_domain_t *b
 	if (ret != 0) {
 		return ret;
 	}
-
-	/* TODO: max_tag is too big. Set lower for now. */
-	size_t num_comm_ids = 1024;
-
-	ep->cm = new nccl_ofi_connection_manager(device->info, ofi_domain, ep->cq, num_comm_ids,
-		domain->base.mr_rkey_pool);
-
-	ep->cm->set_rail_selector(sendrecv_select_rails, ep);
-
+	
 	*base_ep = &ep->base;
 
 	return ret;

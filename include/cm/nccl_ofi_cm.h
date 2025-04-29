@@ -9,12 +9,12 @@
 
 #include <deque>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "nccl_ofi.h"
 
 #include "cm/nccl_ofi_cm_types.h"
-#include "cm/nccl_ofi_cm_comms.h"
 #include "cm/nccl_ofi_cm_resources.h"
 
 /**

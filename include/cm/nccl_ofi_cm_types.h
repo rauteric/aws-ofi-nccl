@@ -7,11 +7,20 @@
 
 #include <rdma/fabric.h>
 
+#include "nccl_ofi.h"
+
 /* Forward class declarations */
 class nccl_ofi_connection_manager;
 class nccl_ofi_cm_send_connector;
-class nccl_ofi_cm_receiver_info;
+class nccl_ofi_cm_receiver;
 class nccl_ofi_cm_listener;
+
+namespace nccl_ofi_cm
+{
+	class nccl_ofi_cm_req;
+	class nccl_ofi_cm_rx_req;
+	class cm_resources;
+}
 
 /* Struct types */
 typedef char ep_name[MAX_EP_ADDR];

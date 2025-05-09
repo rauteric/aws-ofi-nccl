@@ -3898,7 +3898,14 @@ static inline void free_rdma_send_comm(nccl_net_ofi_rdma_send_comm_t *s_comm) {
     }
 }
 
-static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
+
+/**
+ * Destroy a send communicator
+ *
+ * @param release_ep: whether to also release the endpoint associated with the
+ * 		      communicator
+ */
+static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm, bool release_ep)
 {
 	int ret = 0;
 
@@ -3941,7 +3948,9 @@ static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
 
 	free_rdma_send_comm(s_comm);
 
-	ret = ep->base.release_ep(&ep->base, false, false);
+	if (release_ep) {
+		ret = ep->base.release_ep(&ep->base, false, false);
+	}
 
 	return ret;
 }
@@ -3994,7 +4003,7 @@ static int send_comm_process_all_finalizing(void)
 		if (ready_to_destroy) {
 			it = s_comm_cleanup_list->erase(it);
 
-			ret = send_comm_destroy(s_comm);
+			ret = send_comm_destroy(s_comm, /*release_ep*/true);
 			if (ret != 0) {
 				goto exit;
 			}

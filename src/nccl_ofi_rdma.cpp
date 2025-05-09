@@ -94,6 +94,17 @@
 #define GET_RDMA_WRITE_IMM_DATA(comm_id, seq, nseg) \
 	((seq) | ((comm_id) << NCCL_OFI_RDMA_SEQ_BITS) | ((nseg) << (NCCL_OFI_RDMA_SEQ_BITS + NCCL_OFI_RDMA_COMM_ID_BITS)))
 
+/**
+ * Check if domain is active
+ *
+ * Caller is assumed to hold the domain lock
+ */
+#define CHECK_DOMAIN_ACTIVE(domain, fn_name) \
+	if (OFI_UNLIKELY(!domain->base.domain_active)) { \
+		NCCL_OFI_WARN("Called " fn_name " on request with inactive domain"); \
+		return -EINVAL; \
+	} \
+
 /** Global variables **/
 
 /* List of comms undergoing deferred cleanup */
@@ -2755,6 +2766,11 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)base_comm->ep;
 	assert(ep != NULL);
 
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "test");
+
 	/* Process more completions unless the current request is
 	 * completed */
 	if (req->state != NCCL_OFI_RDMA_REQ_COMPLETED
@@ -3157,6 +3173,10 @@ static int reg_mr_send_comm(nccl_net_ofi_send_comm_t *send_comm,
         nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
 	assert(domain != NULL);
 
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_send_comm");
+
 	return reg_mr(domain,
 		      ckey,
 		      type,
@@ -3170,6 +3190,10 @@ static int reg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)recv_comm->base.ep;
 	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
 	assert(domain != NULL);
+
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_recv_comm");
 
 	return reg_mr(domain,
 		      ckey,
@@ -3567,14 +3591,14 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 	if (r_comm->comm_active == false) {
 		NCCL_OFI_WARN("Called irecv on inactive communicator");
 		ret = -EINVAL;
-		goto error;
+		return ret;
 	}
 
 	if (OFI_UNLIKELY(r_comm->num_inflight_reqs == NCCL_OFI_MAX_REQUESTS)) {
 		ret = -ENOSPC;
 		NCCL_OFI_WARN("Can not support more than %d inflight requests",
 			      NCCL_OFI_MAX_REQUESTS);
-		goto error;
+		return ret;
 	}
 
 	dev_id = r_comm->base.base.dev_id;
@@ -3587,6 +3611,11 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	device = rdma_endpoint_get_device(ep);
 	assert(device != NULL);
+
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "recv");
+
 
 	ret = process_cq_if_pending(ep);
 	if (ret == -EAGAIN) {
@@ -3837,6 +3866,7 @@ static inline void free_rdma_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_comm) {
     }
 }
 
+
 static int recv_comm_destroy(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 {
 	nccl_net_ofi_rdma_device_t *device = NULL;
@@ -3958,6 +3988,26 @@ static inline int recv_comm_insert_send_close_req(nccl_net_ofi_rdma_recv_comm_t 
  */
 static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 {
+	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
+		r_comm->base.base.ep;
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	if (!domain->base.domain_active) {
+		/**
+		 * If the domain is not active, no need to send the
+		 * close message. Just destroy the communicator
+		 * immediately.
+		 */
+		return 1;
+	}
+
+	int ret = ofi_process_cq(ep);
+	if (ret != 0) {
+		return ret;
+	}
+
 	if (r_comm->send_close_req == NULL) {
 		/* Waiting for all ctrls to complete */
 		nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
@@ -3976,7 +4026,7 @@ static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_co
 				return 1;
 			}
 
-			int ret = recv_comm_insert_send_close_req(r_comm);
+			ret = recv_comm_insert_send_close_req(r_comm);
 			if (ret != 0) {
 				return ret;
 			}
@@ -4026,17 +4076,11 @@ static int recv_comm_process_all_finalizing(void)
 
 		nccl_net_ofi_rdma_recv_comm_t *r_comm = *it;
 
-		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
-			r_comm->base.base.ep;
-		ret = ofi_process_cq(ep);
-		if (ret != 0) {
-			goto exit;
-		}
-
 		ret = progress_closing_recv_comm(r_comm);
 		if (ret < 0) {
 			goto exit;
 		}
+
 		if (ret == 1) {
 			it = r_comm_cleanup_list->erase(it);
 			ret = recv_comm_destroy(r_comm);
@@ -4113,6 +4157,62 @@ static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
 	return ret;
 }
 
+
+/**
+ * Make progress on a closing send communicator
+ *
+ * @param s_comm: the communicator to progress
+ * @return: 1 if the send comm is ready to be destroyed
+ *          0 if the send comm is not ready to be destroyed
+ *          negative errno code on error
+ */
+static inline int progress_closing_send_comm(nccl_net_ofi_rdma_send_comm_t *s_comm)
+{
+	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
+		s_comm->base.base.ep;
+
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	if (!domain->base.domain_active) {
+		/**
+		 * If the domain is not active, no need to wait for the
+		 * close message. Just destroy the communicator
+		 * immediately.
+		 */
+		return 1;
+	}
+
+	int ret = ofi_process_cq(ep);
+	if (ret != 0) {
+		return ret;
+	}
+
+	nccl_net_ofi_mutex_lock(&s_comm->ctrl_recv_lock);
+
+	/**
+	 * We claim the send communicator is safe to destroy if one of
+	 * the following is true:
+	 *
+	 * 1. We have received the close message from the receiver, and
+	 *    have received all control messages that were sent by the
+	 *    receiver
+	 * 2. We did not receive any control messages from the receiver.
+	 *    In this case, we assume that the receive communicator was
+	 *    never established, and we will never receive a close
+	 *    message.
+	 */
+	bool ready_to_destroy = (s_comm->received_close_message) ?
+				(s_comm->n_ctrl_received == s_comm->n_ctrl_expected) :
+				(s_comm->n_ctrl_received == 0);
+
+	nccl_net_ofi_mutex_unlock(&s_comm->ctrl_recv_lock);
+
+	return ready_to_destroy ? 1 : 0;
+}
+
+
 /**
  * Iterate the list of s_comm's that are pending cleanup, make progress
  * on each one, and destroy resources if the close message and required
@@ -4131,34 +4231,12 @@ static int send_comm_process_all_finalizing(void)
 
 		nccl_net_ofi_rdma_send_comm_t *s_comm = *it;
 
-		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
-			s_comm->base.base.ep;
-		ret = ofi_process_cq(ep);
-		if (ret != 0) {
+		ret = progress_closing_send_comm(s_comm);
+		if (ret < 0) {
 			goto exit;
 		}
 
-		nccl_net_ofi_mutex_lock(&s_comm->ctrl_recv_lock);
-
-		/**
-		 * We claim the send communicator is safe to destroy if one of
-		 * the following is true:
-		 *
-		 * 1. We have received the close message from the receiver, and
-		 *    have received all control messages that were sent by the
-		 *    receiver
-		 * 2. We did not receive any control messages from the receiver.
-		 *    In this case, we assume that the receive communicator was
-		 *    never established, and we will never receive a close
-		 *    message.
-		 */
-		bool ready_to_destroy = (s_comm->received_close_message) ?
-					(s_comm->n_ctrl_received == s_comm->n_ctrl_expected) :
-					(s_comm->n_ctrl_received == 0);
-
-		nccl_net_ofi_mutex_unlock(&s_comm->ctrl_recv_lock);
-
-		if (ready_to_destroy) {
+		if (ret == 1) {
 			it = s_comm_cleanup_list->erase(it);
 
 			ret = send_comm_destroy(s_comm);
@@ -4289,9 +4367,14 @@ static int flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 	int ret = 0;
 	int flush_n = 0;
 	bool network_busy = false;
-	nccl_net_ofi_rdma_ep_t *ep = NULL;
 	nccl_net_ofi_rdma_recv_comm_t *r_comm =
 		(nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
+	nccl_net_ofi_rdma_ep_t *ep = rdma_recv_comm_get_ep(r_comm);
+
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "flush");
 
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	ssize_t rc = 0;
@@ -4303,9 +4386,6 @@ static int flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 			      NCCL_OFI_MAX_REQUESTS);
 		goto error;
 	}
-
-	ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
-	assert(ep != NULL);
 
 	/* Process any pending requests */
 	network_busy = false;
@@ -4699,10 +4779,10 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 			/**
 			 * Since we bypassed domain->get_ep, increment domain
 			 * refcnt.
+			 *
+			 * The caller should already own the domain lock.
 			 */
-			nccl_net_ofi_mutex_lock(&domain->base.domain_lock);
 			domain->base.ref_cnt++;
-			nccl_net_ofi_mutex_unlock(&domain->base.domain_lock);
 
 			ep_for_addr = &new_ep->base;
 
@@ -4972,6 +5052,7 @@ static int post_send_conn_resp(nccl_net_ofi_rdma_recv_comm_t *r_comm,
 
 /*
  * @brief	Close receive communicator if listen request is not pending
+ *		Assumed to hold domain lock
  */
 static int close_listen_recv_comm(nccl_net_ofi_rdma_listen_comm_t *l_comm)
 {
@@ -5028,6 +5109,10 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	assert(device != NULL);
 
 	int dev_id = device->base.dev_id;
+
+	pthread_wrapper lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "accept");
 
 	if (l_comm->stage == COMM_CONNECTED) {
 		NCCL_OFI_WARN("listenComm %p object already has an active connection (%d).",
@@ -5120,9 +5205,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		 * refcnt and free it up when nccl_net_ofi_closeRecv is
 		 * called.
 		 */
-		nccl_net_ofi_mutex_lock(&(domain->base.domain_lock));
 		ep->base.ref_cnt++;
-		nccl_net_ofi_mutex_unlock(&(domain->base.domain_lock));
 
 		/* Reset request state for connect response message */
 		prepare_send_conn_resp_req(l_comm);
@@ -5202,7 +5285,10 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
  exit:;
-	/* Close receive communicator in case listen operation failed */
+	/* Close receive communicator in case listen operation failed
+	   close_listen_recv_comm will take the domain lock in case of an error,
+	   so unlock it here .*/
+	lock.unlock();
 	int close_ret = close_listen_recv_comm(l_comm);
 	if (close_ret) {
 		NCCL_OFI_WARN("Failed to close listen communicator");
@@ -5260,11 +5346,17 @@ static int listen(nccl_net_ofi_ep_t *base_ep,
 		(nccl_net_ofi_rdma_ep_t *)base_ep;
 	nccl_net_ofi_ep_rail_t *first_control_rail = rdma_endpoint_get_control_rail(ep, 0);
 
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+
 	/* Retrieve and validate device */
-	nccl_net_ofi_rdma_device_t *device = rdma_endpoint_get_device(ep);
+	nccl_net_ofi_rdma_device_t *device = rdma_domain_get_device(domain);
 	assert(device != NULL);
 
 	int dev_id = device->base.dev_id;
+
+	pthread_wrapper lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "listen");
 
 	ret = post_rx_buffs(ep);
 	if (ret != 0) {
@@ -5946,7 +6038,7 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 	if (s_comm->comm_active == false) {
 		NCCL_OFI_WARN("Called isend on inactive communicator");
 		ret = -EINVAL;
-		goto error;
+		return ret;
 	}
 
 	/* Support only NCCL_OFI_MAX_REQUESTS inflight requests. */
@@ -5954,7 +6046,7 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 		ret = -EINVAL;
 		NCCL_OFI_WARN("Can not support more than %d inflight requests",
 			      NCCL_OFI_MAX_SEND_REQUESTS);
-		goto error;
+		return ret;
 	}
 
 	dev_id = s_comm->base.base.dev_id;
@@ -5964,6 +6056,10 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 
 	domain = rdma_endpoint_get_domain(ep);
 	assert(domain != NULL);
+
+	pthread_wrapper domain_lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "send");
 
 	ret = process_cq_if_pending(ep);
 	if (ret == -EAGAIN) {
@@ -6589,7 +6685,6 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 	uint16_t rail_id = 0;
 	nccl_net_ofi_ep_rail_t *first_control_rail = rdma_endpoint_get_control_rail(ep, 0);
 	nccl_net_ofi_rdma_send_comm_rail_t *first_comm_control_rail;
-	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
 
 	*s_comm = NULL;
 
@@ -6633,10 +6728,9 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 
 	/* The connect() API function acquired the endpoint we are using via
 	   get_ep(). Increase the refcnt so the endpoint is not freed when the
-	   API releases it. */
-	nccl_net_ofi_mutex_lock(&domain->base.domain_lock);
+	   API releases it.
+	   Caller assumed to own domain lock. */
 	++(ep->base.ref_cnt);
-	nccl_net_ofi_mutex_unlock(&domain->base.domain_lock);
 
 	/* Store communicator ID from handle in communicator */
 	if (OFI_UNLIKELY(handle->comm_id >= device->num_comm_ids)) {
@@ -6730,7 +6824,7 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 			device->comm_idpool->free_id(ret_s_comm->local_comm_id);
 		}
 		nccl_net_ofi_mutex_destroy(&ret_s_comm->ctrl_recv_lock);
-		ep->base.release_ep(&ep->base, false, false);
+		--(ep->base.ref_cnt);
 		free_rdma_send_comm(ret_s_comm);
 	}
 
@@ -6868,8 +6962,14 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 	nccl_net_ofi_rdma_send_comm_t *s_comm =
 		(nccl_net_ofi_rdma_send_comm_t *)comm_state->comm;
 
+	nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+
+	pthread_wrapper lock(&domain->base.domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(domain, "connect");
+
 	/* Retrieve and validate devices */
-	nccl_net_ofi_rdma_device_t *device = (nccl_net_ofi_rdma_device_t *)base_ep->domain->device;
+	nccl_net_ofi_rdma_device_t *device = rdma_domain_get_device(domain);
 	assert(device != NULL);
 
 	/* Connection establishment is not done yet */
@@ -6915,6 +7015,9 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		/* Prepare connect request to be sent to peer */
 		req = prepare_send_conn_req(s_comm);
 		if (OFI_UNLIKELY(req == NULL)) {
+			/* send_comm_destroy calls release_ep, which takes
+			   domain lock. So release it here. */
+			lock.unlock();
 			send_comm_destroy(s_comm);
 			return -ENOMEM;
 		}
@@ -6923,6 +7026,7 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		/* Prepare request to receive connect response message */
 		s_comm->conn_resp_req = prepare_recv_conn_resp_req(s_comm);
 		if (OFI_UNLIKELY(s_comm->conn_resp_req == NULL)) {
+			lock.unlock();
 			send_comm_destroy(s_comm);
 			return -EINVAL;
 		}
@@ -6938,6 +7042,7 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		}
 		else if (ret != 0) {
 			req->free(req, false);
+			lock.unlock();
 			send_comm_destroy(s_comm);
 			return ret;
 		}

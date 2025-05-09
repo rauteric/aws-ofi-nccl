@@ -4064,7 +4064,14 @@ static inline void free_rdma_send_comm(nccl_net_ofi_rdma_send_comm_t *s_comm) {
     }
 }
 
-static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
+
+/**
+ * Destroy a send communicator
+ *
+ * @param release_ep: whether to also release the endpoint associated with the
+ * 		      communicator
+ */
+static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm, bool release_ep)
 {
 	int ret = 0;
 
@@ -4108,7 +4115,9 @@ static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
 
 	free_rdma_send_comm(s_comm);
 
-	ret = ep->base.release_ep(&ep->base, false, false);
+	if (release_ep) {
+		ret = ep->base.release_ep(&ep->base, false, false);
+	}
 
 	return ret;
 }
@@ -4161,7 +4170,7 @@ static int send_comm_process_all_finalizing(void)
 		if (ready_to_destroy) {
 			it = s_comm_cleanup_list->erase(it);
 
-			ret = send_comm_destroy(s_comm);
+			ret = send_comm_destroy(s_comm, /*release_ep*/true);
 			if (ret != 0) {
 				goto exit;
 			}
@@ -6896,7 +6905,7 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		/* Prepare connect request to be sent to peer */
 		req = prepare_send_conn_req(s_comm);
 		if (OFI_UNLIKELY(req == NULL)) {
-			send_comm_destroy(s_comm);
+			send_comm_destroy(s_comm, /*release_ep*/false);
 			return -ENOMEM;
 		}
 		comm_state->req = &req->base;
@@ -6904,7 +6913,11 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		/* Prepare request to receive connect response message */
 		s_comm->conn_resp_req = prepare_recv_conn_resp_req(s_comm);
 		if (OFI_UNLIKELY(s_comm->conn_resp_req == NULL)) {
-			send_comm_destroy(s_comm);
+			/**
+			 * Destroy the send comm, but don't release the ep, since
+			 * the caller (API) will do that
+			 */
+			send_comm_destroy(s_comm, /*release_ep*/false);
 			return -EINVAL;
 		}
 
@@ -6919,7 +6932,7 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		}
 		else if (ret != 0) {
 			req->free(req, false);
-			send_comm_destroy(s_comm);
+			send_comm_destroy(s_comm, /*release_ep*/false);
 			return ret;
 		}
 

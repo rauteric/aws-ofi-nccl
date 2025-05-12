@@ -135,6 +135,7 @@ static inline int free_base_req(uint64_t *num_inflight_reqs,
 
 static inline int check_post_rx_buff_req(nccl_net_ofi_rdma_req_t *rx_buff_req);
 
+static void release_rdma_ep_resources(nccl_net_ofi_rdma_ep_t *ep, int dev_id);
 
 static nccl_net_ofi_rdma_domain_t *rdma_endpoint_get_domain(nccl_net_ofi_rdma_ep_t *ep)
 {
@@ -286,6 +287,11 @@ static inline nccl_net_ofi_rdma_send_comm_rail_t *rdma_send_comm_get_control_rai
 	assert(s_comm->control_rails);
 	assert(rail_id < s_comm->num_control_rails);
 	return &s_comm->control_rails[rail_id];
+}
+
+static nccl_net_ofi_rdma_ep_t *rdma_send_comm_get_ep(nccl_net_ofi_rdma_send_comm_t *s_comm)
+{
+	return (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
 }
 
 /*
@@ -3099,11 +3105,6 @@ static int dereg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
 
 	pthread_lock_guard domain_lock(&domain->base.domain_lock);
 
-	if (!domain->base.domain_active) {
-		NCCL_OFI_WARN("Called dereg_mr_recv_comm on inactive domain");
-		return -EINVAL;
-	}
-
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = (nccl_net_ofi_rdma_mr_handle_t *)mhandle;
 	return dereg_mr(mr_handle, domain);
 }
@@ -3829,6 +3830,8 @@ static inline int recv_comm_insert_send_close_req(nccl_net_ofi_rdma_recv_comm_t 
  */
 static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 {
+	/* TEST TEST */
+	return 1;
 	if (r_comm->send_close_req == NULL) {
 		/* Waiting for all ctrls to complete */
 		nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
@@ -3866,8 +3869,8 @@ static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_co
 		nccl_net_ofi_mutex_unlock(&r_comm->send_close_req->req_lock);
 
 		if (state == NCCL_OFI_RDMA_REQ_ERROR) {
-			NCCL_OFI_WARN("Send close message complete with error");
-			return -EIO;
+			NCCL_OFI_WARN("Send close message complete with error. Destroying recv comm.");
+			return 1;
 
 		} else if (state == NCCL_OFI_RDMA_REQ_COMPLETED) {
 			/* Ready to destroy */
@@ -3911,7 +3914,7 @@ static int recv_comm_process_all_finalizing(void)
 		} else {
 			ret = ofi_process_cq(ep);
 			if (ret != 0) {
-				goto exit;
+				ret = 0;
 			}
 
 			ret = progress_closing_recv_comm(r_comm);
@@ -4045,7 +4048,15 @@ static int send_comm_process_all_finalizing(void)
 
 		ret = ofi_process_cq(ep);
 		if (ret != 0) {
-			goto exit;
+			NCCL_OFI_WARN("cq poll error: destroy");
+			it = s_comm_cleanup_list->erase(it);
+
+			ret = send_comm_destroy(s_comm, /*release_ep*/true);
+			if (ret != 0) {
+				goto exit;
+			}
+
+			continue;
 		}
 
 		nccl_net_ofi_mutex_lock(&s_comm->ctrl_recv_lock);
@@ -4118,6 +4129,31 @@ static int comm_close_handler(void)
 	return ret;
 }
 
+
+/**
+ * Abort an endpoint when a communicator using it still has inflight requests
+ *
+ * This function will
+ * 1. Close the OFI resources (ep, av) associated with the endpoint
+ * 2. Mark the associated domain as inactive to prevent further use of domain
+ *    resources, such as completion queue
+ *
+ * After this function returns, the endpoint will still have non-OFI resources
+ * allocated (freelists, rx requests, etc.), but will not be usable except to
+ * release it (release_ep).
+ */
+static inline void rdma_endpoint_abort(nccl_net_ofi_rdma_ep_t *ep)
+{
+	nccl_net_ofi_domain_t *base_domain = &rdma_endpoint_get_domain(ep)->base;
+	int dev_id = base_domain->device->dev_id;
+
+	pthread_lock_guard domain_lock(&base_domain->domain_lock);
+
+	release_rdma_ep_resources(ep, dev_id);
+
+	base_domain->domain_active = false;
+}
+
 /**
  * Close recv communicator. This function will add the given communicator
  * to the deferred close list. When pending close actions (send_close message
@@ -4135,11 +4171,14 @@ static int recv_close_deferred(nccl_net_ofi_recv_comm_t *recv_comm)
 		(nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
 	int ret = 0;
 
-	/* Make sure all requests are finished */
+	/* If there are still requests in-flight, we need to also close the
+	 * endpoint and invalidate the domain */
 	if (r_comm->num_inflight_reqs > 0) {
-		NCCL_OFI_WARN("Attempt to call recv_close_deferred with outstanding requests!");
-		ret = -EINVAL;
-		goto exit;
+		NCCL_OFI_WARN("Closing recv_comm %p with inflight requests. Invalidating domain",
+			      r_comm);
+
+		auto ep = rdma_recv_comm_get_ep(r_comm);
+		rdma_endpoint_abort(ep);
 	}
 
 	r_comm->comm_active = false;
@@ -4156,7 +4195,6 @@ static int recv_close_deferred(nccl_net_ofi_recv_comm_t *recv_comm)
 
 	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
- exit:
 	return ret;
 }
 
@@ -5139,11 +5177,6 @@ static int dereg_mr_send_comm(nccl_net_ofi_send_comm_t *send_comm,
 
 	pthread_lock_guard domain_lock(&domain->base.domain_lock);
 
-	if (!domain->base.domain_active) {
-		NCCL_OFI_WARN("Called dereg_mr_send_comm on inactive domain");
-		return -EINVAL;
-	}
-
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle =
 		(nccl_net_ofi_rdma_mr_handle_t *)mhandle;
 	return dereg_mr(mr_handle, domain);
@@ -5972,13 +6005,17 @@ static int send_close_deferred(nccl_net_ofi_send_comm_t *send_comm)
 	nccl_net_ofi_rdma_send_comm_t *s_comm =
 		(nccl_net_ofi_rdma_send_comm_t *)send_comm;
 
-	/* Make sure all requests are finished */
+	/* If there are still requests in-flight, we need to also close the
+	 * endpoint and invalidate the domain */
 	if (s_comm->num_inflight_reqs > 0) {
-		NCCL_OFI_WARN("Attempt to call send_close_deferred with outstanding requests!");
-		ret = -EINVAL;
-		goto exit;
+		NCCL_OFI_WARN("Closing send_comm %p with inflight requests. Invalidating domain",
+				s_comm);
+
+		auto ep = rdma_send_comm_get_ep(s_comm);
+		rdma_endpoint_abort(ep);
+	} else {
+		assert (s_comm->num_inflight_writes == 0);
 	}
-	assert (s_comm->num_inflight_writes == 0);
 
 	s_comm->comm_active = false;
 
@@ -5992,7 +6029,6 @@ static int send_close_deferred(nccl_net_ofi_send_comm_t *send_comm)
 	ret = comm_close_handler();
 	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
- exit:
 	return ret;
 }
 

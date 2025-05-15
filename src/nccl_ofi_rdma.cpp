@@ -3276,11 +3276,6 @@ static int dereg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
 
 	pthread_lock_guard domain_lock(&domain->base.domain_lock);
 
-	if (!domain->base.domain_active) {
-		NCCL_OFI_WARN("Called dereg_mr_recv_comm on inactive domain");
-		return -EINVAL;
-	}
-
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = (nccl_net_ofi_rdma_mr_handle_t *)mhandle;
 	return dereg_mr(mr_handle, domain);
 }
@@ -4001,6 +3996,8 @@ static inline int recv_comm_insert_send_close_req(nccl_net_ofi_rdma_recv_comm_t 
  */
 static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 {
+	/* TEST TEST */
+	return 1;
 	if (r_comm->send_close_req == NULL) {
 		/* Waiting for all ctrls to complete */
 		nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
@@ -4038,8 +4035,8 @@ static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_co
 		nccl_net_ofi_mutex_unlock(&r_comm->send_close_req->req_lock);
 
 		if (state == NCCL_OFI_RDMA_REQ_ERROR) {
-			NCCL_OFI_WARN("Send close message complete with error");
-			return -EIO;
+			NCCL_OFI_WARN("Send close message complete with error. Destroying recv comm.");
+			return 1;
 
 		} else if (state == NCCL_OFI_RDMA_REQ_COMPLETED) {
 			/* Ready to destroy */
@@ -4083,7 +4080,7 @@ static int recv_comm_process_all_finalizing(void)
 		} else {
 			ret = ofi_process_cq(ep);
 			if (ret != 0) {
-				goto exit;
+				ret = 0;
 			}
 
 			ret = progress_closing_recv_comm(r_comm);
@@ -4218,7 +4215,15 @@ static int send_comm_process_all_finalizing(void)
 
 		ret = ofi_process_cq(ep);
 		if (ret != 0) {
-			goto exit;
+			NCCL_OFI_WARN("cq poll error: destroy");
+			it = s_comm_cleanup_list->erase(it);
+
+			ret = send_comm_destroy(s_comm, /*release_ep*/true);
+			if (ret != 0) {
+				goto exit;
+			}
+
+			continue;
 		}
 
 		nccl_net_ofi_mutex_lock(&s_comm->ctrl_recv_lock);
@@ -4238,6 +4243,7 @@ static int send_comm_process_all_finalizing(void)
 		bool ready_to_destroy = (s_comm->received_close_message) ?
 					(s_comm->n_ctrl_received == s_comm->n_ctrl_expected) :
 					(s_comm->n_ctrl_received == 0);
+		ready_to_destroy = true;
 
 		nccl_net_ofi_mutex_unlock(&s_comm->ctrl_recv_lock);
 
@@ -5472,11 +5478,6 @@ static int dereg_mr_send_comm(nccl_net_ofi_send_comm_t *send_comm,
 	assert(domain != NULL);
 
 	pthread_lock_guard domain_lock(&domain->base.domain_lock);
-
-	if (!domain->base.domain_active) {
-		NCCL_OFI_WARN("Called dereg_mr_send_comm on inactive domain");
-		return -EINVAL;
-	}
 
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle =
 		(nccl_net_ofi_rdma_mr_handle_t *)mhandle;

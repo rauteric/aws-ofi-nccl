@@ -61,13 +61,13 @@ else
   libinternal_net_cudart_plugin_la_CPPFLAGS += -isystem $(abs_top_srcdir)/3rd-party/nccl/$(DEVICE_INTERFACE)/include
   libinternal_net_cudart_plugin_la_CPPFLAGS += -isystem $(abs_top_srcdir)/3rd-party/uthash/include
   libinternal_net_cudart_plugin_la_CPPFLAGS += -I$(abs_top_srcdir)/include
-  libinternal_net_cudart_plugin_la_LDFLAGS = -whole-archive -static -avoid-version $(CUDA_LDFLAGS)
-  libinternal_net_cudart_plugin_la_LIBADD = $(CUDA_LIBS)
+  libinternal_net_cudart_plugin_la_LDFLAGS = -whole-archive -static -lstdc++ -avoid-version $(CUDA_LDFLAGS)
+  libinternal_net_cudart_plugin_la_LIBADD = $(CUDA_LIBS) -lstdc++
   libinternal_net_plugin_la_LIBADD = libinternal_net_cudart_plugin.la
   lib_LTLIBRARIES = libnccl-net-ofi.la
   libnccl_net_ofi_la_SOURCES =
-  libnccl_net_ofi_la_LIBADD = libinternal_net_plugin.la
-  libnccl_net_ofi_la_LDFLAGS = -module -avoid-version
+  libnccl_net_ofi_la_LIBADD = libinternal_net_plugin.la -lstdc++
+  libnccl_net_ofi_la_LDFLAGS = -module -avoid-version -lstdc++
 
 
 if ENABLE_NCCL_NET_SYMLINK

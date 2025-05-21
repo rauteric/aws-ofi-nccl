@@ -60,6 +60,7 @@ jobs:
 
           - efainstaller: 1.25.0
             platform-aws: disable
+            sdk: cuda
 
           - container: public.ecr.aws/amazonlinux/amazonlinux:2023
             displayname: al2023

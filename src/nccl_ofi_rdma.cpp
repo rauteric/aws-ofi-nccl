@@ -3806,7 +3806,7 @@ static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_co
 			   immediately */
 			/* TODO: this workaround will not be needed with the new
 			   CM code when data_progress_auto is true */
-			if (n_ctrl_sent == 0) {
+			if (!data_progress_auto && n_ctrl_sent == 0) {
 				return 1;
 			}
 
@@ -3987,7 +3987,7 @@ static int send_comm_process_all_finalizing(void)
 		 */
 		bool ready_to_destroy = (s_comm->received_close_message) ?
 					(s_comm->n_ctrl_received == s_comm->n_ctrl_expected) :
-					(s_comm->n_ctrl_received == 0);
+					(!data_progress_auto && s_comm->n_ctrl_received == 0);
 
 		nccl_net_ofi_mutex_unlock(&s_comm->ctrl_recv_lock);
 

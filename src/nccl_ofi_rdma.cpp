@@ -3910,6 +3910,9 @@ static int recv_comm_process_all_finalizing(void)
 			 * immediately.
 			 */
 			ret = 1;
+		} else if (true) {
+			/** TEST TEST TEST TEST **/
+			ret = 1;
 		} else {
 			ret = ofi_process_cq(ep);
 			if (ret != 0) {
@@ -4023,6 +4026,15 @@ static int send_comm_process_all_finalizing(void)
 	for (auto it = s_comm_cleanup_list->begin(); it != s_comm_cleanup_list->end();) {
 
 		nccl_net_ofi_rdma_send_comm_t *s_comm = *it;
+
+		/** TEST TEST TEST TEST **/
+		it = s_comm_cleanup_list->erase(it);
+
+		ret = send_comm_destroy(s_comm, /*release_ep*/true);
+		if (ret != 0) {
+			goto exit;
+		}
+		continue;
 
 		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
 			s_comm->base.base.ep;

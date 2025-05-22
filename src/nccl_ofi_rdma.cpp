@@ -1916,6 +1916,7 @@ static inline int rdma_process_error_entry(struct fi_cq_err_entry *err_entry, st
 	void *op_ctx = err_entry->op_context;
 	if (OFI_UNLIKELY(op_ctx == NULL)) {
 		NCCL_OFI_WARN("Invalid request context provided");
+		NCCL_OFI_WARN("Flags: %lu", err_entry->flags);
 		return -EINVAL;
 	}
 
@@ -7067,6 +7068,11 @@ nccl_net_ofi_rdma_domain_free(nccl_net_ofi_domain_t *base_domain)
 	int ret;
 	nccl_net_ofi_rdma_domain_t *domain = (nccl_net_ofi_rdma_domain_t *)base_domain;
 
+	if (domain->cm) {
+		delete domain->cm;
+		domain->cm = nullptr;
+	}
+
 	ret = dealloc_and_dereg_flush_buff(domain);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Failed to deregister ctrl buffer pool");
@@ -7075,7 +7081,10 @@ nccl_net_ofi_rdma_domain_free(nccl_net_ofi_domain_t *base_domain)
 
 	for (uint16_t i = 0 ; i < domain->num_rails ; ++i) {
 		if (domain->domain_rails[i].cq != NULL) {
-			fi_close(&domain->domain_rails[i].cq->fid);
+			ret = fi_close(&domain->domain_rails[i].cq->fid);
+			if (ret != 0) {
+				NCCL_OFI_WARN("Failed to close cq!");
+			}
 			domain->domain_rails[i].cq = NULL;
 		}
 		fi_close(&domain->domain_rails[i].domain->fid);

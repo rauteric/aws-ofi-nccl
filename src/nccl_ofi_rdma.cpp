@@ -136,6 +136,7 @@ static inline int free_base_req(uint64_t *num_inflight_reqs,
 static inline int check_post_rx_buff_req(nccl_net_ofi_rdma_req_t *rx_buff_req);
 
 static void release_rdma_ep_resources(nccl_net_ofi_rdma_ep_t *ep, int dev_id);
+static void release_rdma_ep_resources_data(nccl_net_ofi_rdma_ep_t *ep, int dev_id);
 
 static nccl_net_ofi_rdma_domain_t *rdma_endpoint_get_domain(nccl_net_ofi_rdma_ep_t *ep)
 {
@@ -1054,17 +1055,19 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		}
 
 		/* Initiate rdma write */
-		ret = send_progress(req);
-		if (ret == -FI_EAGAIN) {
-			/* Add to pending reqs queue */
-			nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
-			ep->pending_reqs_queue->push_back(req);
-			nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
-			ret = 0;
-			NCCL_OFI_TRACE_PENDING_INSERT(req);
-		}
-		else if (OFI_UNLIKELY(ret != 0)) {
-			return ret;
+		if (s_comm->base.base.ep->domain->domain_active) {
+			ret = send_progress(req);
+			if (ret == -FI_EAGAIN) {
+				/* Add to pending reqs queue */
+				nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
+				ep->pending_reqs_queue->push_back(req);
+				nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
+				ret = 0;
+				NCCL_OFI_TRACE_PENDING_INSERT(req);
+			}
+			else if (OFI_UNLIKELY(ret != 0)) {
+				return ret;
+			}
 		}
 	} else {
 		/* If recv buffer is smaller than send buffer, we reduce the size of the send req, even if we have
@@ -1324,8 +1327,12 @@ static inline int handle_rx_buff_recv(nccl_net_ofi_rdma_device_t *device, uint16
 		break;
 	case NCCL_OFI_RDMA_MSG_EAGER:
 		/* Eager message receive completion */
-
 		r_comm = rdma_device_get_recv_comm(device, GET_COMM_ID_FROM_IMM(cq_entry->data));
+
+		if (!(r_comm->base.base.ep->domain->domain_active)) {
+			/** Just return here **/
+			return ret;
+		}
 
 		NCCL_OFI_TRACE_EAGER_RECV(r_comm->base.base.dev_id, rail_id, r_comm,
 					  GET_SEQ_NUM_FROM_IMM(cq_entry->data));
@@ -1574,6 +1581,10 @@ static inline int rdma_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 					  comp_flags & FI_REMOTE_CQ_DATA);
 
 	} else if (comp_flags & FI_WRITE) {
+		nccl_net_ofi_domain_t *domain = req->comm->ep->domain;
+		if (!domain->domain_active) {
+			return 0;
+		}
 		switch (req->type) {
 		case NCCL_OFI_RDMA_SEND: {
 			/* Local-initiated write of send operation is complete */
@@ -1606,6 +1617,12 @@ static inline int rdma_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 			ret = -EINVAL;
 		}
 	} else if (comp_flags & FI_READ) {
+
+		nccl_net_ofi_domain_t *domain = req->comm->ep->domain;
+		if (!domain->domain_active) {
+			return 0;
+		}
+
 		switch (req->type) {
 		case NCCL_OFI_RDMA_FLUSH: {
 			/* fi_read flush is complete */
@@ -1857,6 +1874,15 @@ static int process_pending_reqs(nccl_net_ofi_rdma_ep_t *ep)
 		}
 		nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
 		if (req == NULL) { break; }
+		nccl_net_ofi_domain_t *domain =
+			(req->type == NCCL_OFI_RDMA_CTRL_RX_BUFF ||
+			 req->type == NCCL_OFI_RDMA_EAGER_RX_BUFF)
+			? get_rx_buff_data(req)->ep->base.domain :
+			req->comm->ep->domain;
+		if (!domain->domain_active) {
+			NCCL_OFI_WARN("Pending request on inactive domain");
+			abort(); abort(); abort(); abort(); abort();
+		}
 
 		switch (req->type) {
 			case NCCL_OFI_RDMA_WRITE:
@@ -3901,25 +3927,16 @@ static int recv_comm_process_all_finalizing(void)
 
 		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
 			r_comm->base.base.ep;
-		nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
+		//nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
 
-		if (!domain->base.domain_active) {
-			/**
-			 * If the domain is not active, no need to send the
-			 * close message. Just destroy the communicator
-			 * immediately.
-			 */
-			ret = 1;
-		} else {
-			ret = ofi_process_cq(ep);
-			if (ret != 0) {
-				ret = 0;
-			}
+		ret = ofi_process_cq(ep);
+		if (ret != 0) {
+			ret = 0;
+		}
 
-			ret = progress_closing_recv_comm(r_comm);
-			if (ret < 0) {
-				goto exit;
-			}
+		ret = progress_closing_recv_comm(r_comm);
+		if (ret < 0) {
+			goto exit;
 		}
 
 		if (ret == 1) {
@@ -4027,23 +4044,7 @@ static int send_comm_process_all_finalizing(void)
 		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)
 			s_comm->base.base.ep;
 
-		nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
-
-		if (!domain->base.domain_active) {
-			/**
-			 * If the domain is not active, no need to wait for the
-			 * close message. Just destroy the communicator
-			 * immediately.
-			 */
-			it = s_comm_cleanup_list->erase(it);
-
-			ret = send_comm_destroy(s_comm, /*release_ep*/true);
-			if (ret != 0) {
-				goto exit;
-			}
-
-			continue;
-		}
+		//nccl_net_ofi_rdma_domain_t *domain = rdma_endpoint_get_domain(ep);
 
 		ret = ofi_process_cq(ep);
 		if (ret != 0) {
@@ -4148,7 +4149,7 @@ static inline void rdma_endpoint_abort(nccl_net_ofi_rdma_ep_t *ep)
 
 	pthread_lock_guard domain_lock(&base_domain->domain_lock);
 
-	release_rdma_ep_resources(ep, dev_id);
+	release_rdma_ep_resources_data(ep, dev_id);
 
 	base_domain->domain_active = false;
 }
@@ -6669,6 +6670,19 @@ static void release_rdma_ep_resources(nccl_net_ofi_rdma_ep_t *ep, int dev_id)
 		rail = rdma_endpoint_get_control_rail(ep, rail_id);
 		ep_rail_release(rail, dev_id);
 	}
+
+	for (uint16_t rail_id = 0; rail_id != ep->num_rails; ++rail_id) {
+		rail = rdma_endpoint_get_rail(ep, rail_id);
+		ep_rail_release(rail, dev_id);
+	}
+}
+
+/*
+ * @brief	Release libfabric resources of rdma endpoint (data only)
+ */
+static void release_rdma_ep_resources_data(nccl_net_ofi_rdma_ep_t *ep, int dev_id)
+{
+	nccl_net_ofi_ep_rail_t *rail;
 
 	for (uint16_t rail_id = 0; rail_id != ep->num_rails; ++rail_id) {
 		rail = rdma_endpoint_get_rail(ep, rail_id);

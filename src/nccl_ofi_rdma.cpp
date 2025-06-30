@@ -2703,6 +2703,30 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	} else if (OFI_UNLIKELY(req->state == NCCL_OFI_RDMA_REQ_ERROR)) {
 		ret = -EINVAL;
 		goto exit;
+	} else {
+		if (!req->req_timeout_printed) {
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long elapsed_seconds = now.tv_sec - req->req_start.tv_sec;
+			if (elapsed_seconds > 5) {
+				NCCL_OFI_WARN("request incomplete for more than 5 seconds");
+				if (req->type == NCCL_OFI_RDMA_SEND) {
+					rdma_req_send_data_t *send_data = get_send_data(req);
+					NCCL_OFI_WARN("eager send: %d", send_data->eager);
+					NCCL_OFI_WARN("xferred_rail_id: %d", send_data->xferred_rail_id);
+					NCCL_OFI_WARN("send ncompls: %d", req->ncompls);
+				} else if (req->type == NCCL_OFI_RDMA_RECV) {
+					rdma_req_recv_data_t *recv_data = get_recv_data(req);
+					NCCL_OFI_WARN("eager_copy_req: %p", recv_data->eager_copy_req);
+					NCCL_OFI_WARN("send_ctrl ncompls: %d", recv_data->send_ctrl_req->ncompls);
+					NCCL_OFI_WARN("recv_segms ncompls: %d", recv_data->recv_segms_req->ncompls);
+					NCCL_OFI_WARN("recv ncompls: %d", req->ncompls);
+				} else {
+					NCCL_OFI_WARN("Unknown request type");
+				}
+				req->req_timeout_printed = true;
+			}
+		}
 	}
 
  exit:
@@ -3116,6 +3140,9 @@ static inline nccl_net_ofi_rdma_req_t *allocate_req(nccl_ofi_freelist_t *fl)
 	assert(req);
 
 	req->elem = elem;
+
+	clock_gettime(CLOCK_MONOTONIC, &req->req_start);
+	req->req_timeout_printed = false;
 
 	return req;
 }

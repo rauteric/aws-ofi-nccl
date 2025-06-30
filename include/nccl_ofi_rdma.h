@@ -9,6 +9,7 @@
 #include <rdma/fabric.h>
 
 #include <deque>
+#include <ctime>
 
 #include "nccl_ofi.h"
 #include "cm/nccl_ofi_cm.h"
@@ -402,6 +403,9 @@ typedef struct nccl_net_ofi_rdma_req {
 	 * request by its own. */
 	int (*free)(nccl_net_ofi_rdma_req_t *req,
 		    bool dec_inflight_reqs);
+
+	struct timespec req_start;
+	bool req_timeout_printed = false;
 
 } nccl_net_ofi_rdma_req_t;
 

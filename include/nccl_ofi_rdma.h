@@ -711,6 +711,11 @@ struct nccl_net_ofi_rdma_ep {
 	/* thread id of the thread that called get_ep().  Used as the
 	   hash key for the endpoint hash */
 	long creating_thread_id;
+
+	/* DEBUG */
+	int scnt;
+	int rcnt;
+	int lcnt;
 };
 
 /*

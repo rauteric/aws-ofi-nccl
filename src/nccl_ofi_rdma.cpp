@@ -4177,6 +4177,13 @@ static int recv_close_deferred(nccl_net_ofi_recv_comm_t *recv_comm)
 
 	r_comm->comm_active = false;
 
+	{
+		auto *ep = rdma_recv_comm_get_ep(r_comm);
+		pthread_wrapper lock(&ep->base.domain->domain_lock);
+		ep->rcnt--;
+		NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Close rcomm %p rcnt %d", r_comm, ep->rcnt);
+	}
+
 	nccl_net_ofi_mutex_lock(&comm_cleanup_list_lock);
 
 	/* Defer cleanup until we deliver all outstanding control messages
@@ -5028,6 +5035,8 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 		ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 		assert(ep != NULL);
+		ep->rcnt++;
+		NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Open rcomm %p rcnt %d", r_comm, ep->rcnt);
 
 		l_comm->stage = COMM_CONN_RESP_REQ_PENDING;
 
@@ -5117,6 +5126,13 @@ static int listen_close(nccl_net_ofi_listen_comm_t *listen_comm)
 		}
 	}
 
+	{
+		auto *ep = reinterpret_cast<nccl_net_ofi_rdma_ep_t *>(base_ep);
+		pthread_wrapper lock(&ep->base.domain->domain_lock);
+		ep->lcnt--;
+		NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Close lcomm %p rcnt %d", l_comm, ep->lcnt);
+	}
+
 	delete l_comm->listener;
 	l_comm->listener = nullptr;
 
@@ -5145,8 +5161,11 @@ static int listen(nccl_net_ofi_ep_t *base_ep,
 
 	pthread_wrapper lock(&domain->base.domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain, "listen");
-
+	if (OFI_UNLIKELY(!domain->base.domain_active)) {
+		NCCL_OFI_WARN("Called " "listen" " on request with inactive domain");
+		NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "scnt %d rcnt %d lcnt %d", ep->scnt, ep->rcnt, ep->lcnt);
+		return -EINVAL;
+	}
 	ret = post_rx_buffs(ep);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Error posting rx buffers: %d", ret);
@@ -5173,6 +5192,8 @@ static int listen(nccl_net_ofi_ep_t *base_ep,
 	l_comm->listener = domain->cm->listen();
 
 	*handle = l_comm->listener->get_handle();
+	ep->lcnt++;
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Open l_comm %p lcnt %d", l_comm, ep->lcnt);
 
 	*listen_comm = &l_comm->base;
 
@@ -6026,6 +6047,13 @@ static int send_close_deferred(nccl_net_ofi_send_comm_t *send_comm)
 
 	s_comm->comm_active = false;
 
+	{
+		auto *ep = rdma_send_comm_get_ep(s_comm);
+		pthread_wrapper lock(&ep->base.domain->domain_lock);
+		ep->scnt--;
+		NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Close scomm %p scnt %d", s_comm, ep->scnt);
+	}
+
 	nccl_net_ofi_mutex_lock(&comm_cleanup_list_lock);
 
 	/* Deferred cleanup */
@@ -6579,6 +6607,8 @@ static int connect(nccl_net_ofi_ep_t *base_ep,
 		if (OFI_UNLIKELY(ret != 0)) {
 			return ret;
 		}
+		ep->scnt++;
+		NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Open scomm %p scnt %d", s_comm, ep->scnt);
 		if (OFI_UNLIKELY(s_comm == NULL)) {
 			return -ENOMEM;
 		}

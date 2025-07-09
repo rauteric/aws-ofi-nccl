@@ -4161,6 +4161,7 @@ static inline void rdma_endpoint_abort(nccl_net_ofi_rdma_ep_t *ep)
  */
 static int recv_close_deferred(nccl_net_ofi_recv_comm_t *recv_comm)
 {
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Enter recv_close rcomm %p", recv_comm);
 	nccl_net_ofi_rdma_recv_comm_t *r_comm =
 		(nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
 	int ret = 0;
@@ -4196,6 +4197,7 @@ static int recv_close_deferred(nccl_net_ofi_recv_comm_t *recv_comm)
 
 	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Exit recv_close rcomm %p", r_comm);
 	return ret;
 }
 
@@ -5109,6 +5111,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 static int listen_close(nccl_net_ofi_listen_comm_t *listen_comm)
 {
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Enter listen_close lcomm %p", listen_comm);
 	nccl_net_ofi_rdma_listen_comm_t *l_comm =
 		(nccl_net_ofi_rdma_listen_comm_t *)listen_comm;
 
@@ -5139,6 +5142,7 @@ static int listen_close(nccl_net_ofi_listen_comm_t *listen_comm)
 	free(l_comm);
 	ret = base_ep->release_ep(base_ep, false, false);
 
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Exit listen_close lcomm %p", listen_comm);
 	return ret;
 }
 
@@ -6030,6 +6034,8 @@ static int send_close_deferred(nccl_net_ofi_send_comm_t *send_comm)
 {
 	int ret = 0;
 
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Enter send_close scomm %p", send_comm);
+
 	nccl_net_ofi_rdma_send_comm_t *s_comm =
 		(nccl_net_ofi_rdma_send_comm_t *)send_comm;
 
@@ -6063,6 +6069,8 @@ static int send_close_deferred(nccl_net_ofi_send_comm_t *send_comm)
 	num_open_comms--;
 	ret = comm_close_handler();
 	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
+
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Exit send_close scomm %p", s_comm);
 
 	return ret;
 }

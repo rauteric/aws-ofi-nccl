@@ -49,3 +49,10 @@ noinst_HEADERS = \
 	tuner/nccl_ofi_tuner_common.h \
 	tuner/nccl_ofi_tuner_region.h \
 	tuner/nccl_ofi_tuner_model.h
+
+if ENABLE_GIN
+noinst_HEADERS += \
+	gin/nccl_ofi_gin_reqs.h \
+	gin/nccl_ofi_gin_types.h \
+	gin/nccl_ofi_gin.h
+endif

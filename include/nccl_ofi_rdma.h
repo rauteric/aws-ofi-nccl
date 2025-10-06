@@ -71,6 +71,16 @@ static_assert(MAX_NUM_RAILS <= UINT16_MAX);
  */
 #define NCCL_OFI_RDMA_SEQ_BITS     (10)
 
+/*
+ * @brief	Message sequence number bitmask for immediate data
+ */
+#define MSG_SEQ_NUM_MASK (((uint64_t)1 << NCCL_OFI_RDMA_SEQ_BITS) - 1)
+
+/*
+ * @brief	Number of bits used for number of segments value
+ */
+#define NUM_NUM_SEG_BITS ((uint64_t)4)
+
 typedef enum nccl_net_ofi_rdma_req_state {
 	NCCL_OFI_RDMA_REQ_CREATED = 0,
 	NCCL_OFI_RDMA_REQ_PENDING,
@@ -109,6 +119,7 @@ enum nccl_ofi_rdma_msg_type {
 	NCCL_OFI_RDMA_MSG_EAGER,
 	NCCL_OFI_RDMA_MSG_CLOSE,
 	NCCL_OFI_RDMA_MSG_CTRL_NO_COMPLETION,
+	NCCL_OFI_RDMA_MSG_GIN_METADATA,
 	NCCL_OFI_RDMA_MSG_INVALID = 15,
 	NCCL_OFI_RDMA_MSG_MAX = NCCL_OFI_RDMA_MSG_INVALID,
 };
@@ -289,6 +300,7 @@ typedef struct {
 	 * Used mostly when the network xfer is sliced across multiple rails */
 	uint16_t xferred_rail_id;
 } rdma_req_rma_op_data_t;
+
 
 typedef struct {
 	/* True for eager messages */
@@ -1487,4 +1499,41 @@ static inline nccl_net_ofi_rdma_recv_comm_rail_t *rdma_recv_comm_get_rail(nccl_n
 	assert(rail_id < r_comm->num_rails);
 	return &r_comm->rails[rail_id];
 }
+
+typedef struct {
+	nccl_net_ofi_rdma_mr_handle_t *mr_handle;
+	nccl_net_ofi_rdma_domain_t *domain;
+} freelist_regmr_fn_handle_t;
+
+/**
+ * Register host memory for use with the given communicator
+ *
+ * This interface is suitable for use with freelist_init_mr.
+ *
+ * @param	data
+ *		Pointer to memory region. Must be aligned to page size.
+ * @param	size
+ *		Size of memory region. Must be a multiple of page size.
+ */
+int freelist_regmr_host_fn(void *domain_void_ptr, void *data, size_t size, void **handle);
+
+
+/**
+ * Deregister host memory registered with freelist_regmr_host_fn
+ *
+ * This interface is suitable for use with a freelist.
+ */
+int freelist_deregmr_host_fn(void *handle);
+
+
+/*
+ * @brief	Build write completion immediate data from comm ID, message seq
+ *		number and number of segments used to transfer RDMA write
+ *
+ * The immediate data bit format is documented in the definition of NCCL_OFI_RDMA_SEQ_BITS
+ */
+#define GET_RDMA_WRITE_IMM_DATA(comm_id, seq, nseg) \
+	((seq) | ((comm_id) << NCCL_OFI_RDMA_SEQ_BITS) | ((nseg) << (NCCL_OFI_RDMA_SEQ_BITS + NCCL_OFI_RDMA_COMM_ID_BITS)))
+
+
 #endif // End NCCL_OFI_RDMA_H_

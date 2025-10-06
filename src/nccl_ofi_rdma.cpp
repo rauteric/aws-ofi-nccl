@@ -34,13 +34,12 @@
 #include "nccl_ofi_dmabuf.h"
 #include "nccl_ofi_mr.h"
 
+#if HAVE_GIN
+#include "gin/nccl_ofi_gin.h"
+#endif
+
 /* Message buffer size -- maximum span of simultaneous inflight messages */
 #define NCCL_OFI_RDMA_MSGBUFF_SIZE 256
-
-/*
- * @brief	Number of bits used for number of segments value
- */
-#define NUM_NUM_SEG_BITS ((uint64_t)4)
 
 /*
  * @brief	Communicator ID bitmask
@@ -51,11 +50,6 @@
  * @brief	Signifier for an invalid Communicator ID
  */
 #define COMM_ID_INVALID            (COMM_ID_MASK)
-
-/*
- * @brief	Message sequence number bitmask for immediate data
- */
-#define MSG_SEQ_NUM_MASK (((uint64_t)1 << NCCL_OFI_RDMA_SEQ_BITS) - 1)
 
 /*
  * @brief	Number of segments bitmask for immediate data
@@ -82,15 +76,6 @@
  * The immediate data bit format is documented in the definition of NCCL_OFI_RDMA_SEQ_BITS
  */
 #define GET_NUM_SEG_FROM_IMM(data) (((data) >> (NCCL_OFI_RDMA_SEQ_BITS + NCCL_OFI_RDMA_COMM_ID_BITS)) & MSG_NUM_SEG_MASK)
-
-/*
- * @brief	Build write completion immediate data from comm ID, message seq
- *		number and number of segments used to transfer RDMA write
- *
- * The immediate data bit format is documented in the definition of NCCL_OFI_RDMA_SEQ_BITS
- */
-#define GET_RDMA_WRITE_IMM_DATA(comm_id, seq, nseg) \
-	((seq) | ((comm_id) << NCCL_OFI_RDMA_SEQ_BITS) | ((nseg) << (NCCL_OFI_RDMA_SEQ_BITS + NCCL_OFI_RDMA_COMM_ID_BITS)))
 
 /*
  * Return value from some functions indicating that the communicator is
@@ -934,7 +919,7 @@ static int handle_close_msg_recv(nccl_net_ofi_rdma_req_t *rx_buff_req)
  * 		RDMA control messages (s_comm), eager messages (r_comm).
  */
 static inline int handle_rx_buff_recv(nccl_net_ofi_rdma_device_t *device, uint16_t rail_id, struct fi_cq_data_entry *cq_entry,
-				     nccl_net_ofi_rdma_req_t *rx_buff_req, bool eager)
+				      fi_addr_t src_addr, nccl_net_ofi_rdma_req_t *rx_buff_req, bool eager)
 {
 	int ret = 0;
 	rdma_req_rx_buff_data_t *rx_buff_data = NULL;
@@ -944,8 +929,8 @@ static inline int handle_rx_buff_recv(nccl_net_ofi_rdma_device_t *device, uint16
 		NCCL_OFI_WARN("RECV event had NULL ctx!");
 		return -EINVAL;
 	}
-	if (OFI_UNLIKELY((eager && (rx_buff_req->type != NCCL_OFI_RDMA_EAGER_RX_BUFF))
-			 || ((!eager) && (rx_buff_req->type != NCCL_OFI_RDMA_CTRL_RX_BUFF)))) {
+	if (OFI_UNLIKELY((rx_buff_req->type != NCCL_OFI_RDMA_EAGER_RX_BUFF) &&
+		         (rx_buff_req->type != NCCL_OFI_RDMA_CTRL_RX_BUFF))) {
 		NCCL_OFI_WARN("Invalid non-rx_buff request as ctx!");
 		return -EINVAL;
 	}
@@ -962,7 +947,8 @@ static inline int handle_rx_buff_recv(nccl_net_ofi_rdma_device_t *device, uint16
 		assert(rx_buff_data->rail == ep->rdma_endpoint_get_rail(rail_id));
 	} else {
 		/* Non-eager messages should be received on the control rail */
-		assert(rx_buff_data->rail == ep->rdma_endpoint_get_control_rail(rail_id));
+		// TODO not yet true for GIN messages
+		// assert(rx_buff_data->rail == ep->rdma_endpoint_get_control_rail(rail_id));
 	}
 #endif
 
@@ -970,7 +956,8 @@ static inline int handle_rx_buff_recv(nccl_net_ofi_rdma_device_t *device, uint16
 	 * header type.  So cast to a close message and lookup the
 	 * type from there. */
 	nccl_ofi_rdma_msg_type_t msg_type = eager ? (nccl_ofi_rdma_msg_type_t)NCCL_OFI_RDMA_MSG_EAGER
-	                                          : rx_get_close_msg(rx_buff_data)->type;
+	                                          : static_cast<nccl_net_ofi_rdma_close_msg_t *>
+						    (rx_buff_data->rx_buff_fl_elem->ptr)->type;
 
 	switch (msg_type) {
 	case NCCL_OFI_RDMA_MSG_CLOSE:
@@ -1002,6 +989,27 @@ static inline int handle_rx_buff_recv(nccl_net_ofi_rdma_device_t *device, uint16
 			goto exit;
 		}
 		break;
+#if HAVE_GIN
+	case NCCL_OFI_RDMA_MSG_GIN_METADATA: {
+
+		auto *metadata = static_cast<const nccl_net_ofi_rdma_signal_metadata_msg_t *>
+			(get_rx_buff_data(rx_buff_req)->rx_buff_fl_elem->ptr);
+
+		auto *gin_comm = static_cast<nccl_ofi_gin_comm *>
+			(device->rdma_device_get_comm(metadata->remote_comm_id));
+		assert(gin_comm->type == NCCL_NET_OFI_GIN_COMM);
+
+		ret = gin_handle_signal_metadata_completion(gin_comm, src_addr, rail_id, metadata);
+
+		/* Attempt to re-post rx buffer */
+		ret = ep->repost_rx_buff(rx_buff_req);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to repost rx buff");
+			return ret;
+		}
+		break;
+	}
+#endif
 	default:
 		NCCL_OFI_WARN("Recv completion with unexpected type");
 		ret = -EINVAL;
@@ -1017,21 +1025,10 @@ exit:
  * @param	ep, to look up r_comm from ID encoded in data
  * @param	data, the immediate data
  */
-static inline nccl_net_ofi_rdma_req_t *get_req_from_imm_data
-	(nccl_net_ofi_rdma_device_t *device, uint64_t data)
+static inline nccl_net_ofi_rdma_req_t *get_req_from_msg_seq_num
+	(nccl_net_ofi_rdma_device_t *device, nccl_net_ofi_rdma_recv_comm_t *r_comm,
+	 uint16_t msg_seq_num)
 {
-	uint32_t comm_id = GET_COMM_ID_FROM_IMM(data);
-	nccl_net_ofi_rdma_recv_comm_t *r_comm = device->rdma_device_get_recv_comm(comm_id);
-	if (OFI_UNLIKELY(r_comm == nullptr)) {
-		/* Received write-immediate completion for non-existent recv
-		   communicator. This should never happen, since the domain
-		   should have been invalidated in this case */
-		NCCL_OFI_WARN("Received write-immediate message for non-existent r_comm (%u)",
-			      comm_id);
-		return nullptr;
-	}
-
-	uint16_t msg_seq_num = GET_SEQ_NUM_FROM_IMM(data);
 	void *elem;
 	nccl_ofi_msgbuff_elemtype_t type;
 	nccl_ofi_msgbuff_status_t stat;
@@ -1051,14 +1048,14 @@ static inline nccl_net_ofi_rdma_req_t *get_req_from_imm_data
 	return (nccl_net_ofi_rdma_req_t *)elem;
 }
 
-/**
- * @brief	Handle completion for a remote write event
- */
-static inline int handle_write_comp(struct fi_cq_data_entry *cq_entry, nccl_net_ofi_rdma_device_t *device, uint16_t rail_id)
-{
-	int ret;
 
-	nccl_net_ofi_rdma_req_t *req = get_req_from_imm_data(device, cq_entry->data);
+static inline int rdma_handle_write_completion(nccl_net_ofi_rdma_device_t *device,
+					       nccl_net_ofi_rdma_recv_comm_t *r_comm,
+					       uint16_t msg_seq_num,
+					       uint64_t total_segms,
+					       size_t len)
+{
+	nccl_net_ofi_rdma_req_t *req = get_req_from_msg_seq_num(device, r_comm, msg_seq_num);
 	if (!req) {
 		return -EINVAL;
 	}
@@ -1067,9 +1064,7 @@ static inline int handle_write_comp(struct fi_cq_data_entry *cq_entry, nccl_net_
 	rdma_req_recv_data_t *recv_data = get_recv_data(req);
 	nccl_net_ofi_rdma_req_t *recv_segms_req = recv_data->recv_segms_req;
 
-	uint64_t total_segms = GET_NUM_SEG_FROM_IMM(cq_entry->data);
-
-	ret = inc_recv_seg_completion(recv_segms_req, cq_entry->len, total_segms);
+	int ret = inc_recv_seg_completion(recv_segms_req, len, total_segms);
 	if (OFI_UNLIKELY(ret != 0)) {
 		return ret;
 	}
@@ -1077,6 +1072,45 @@ static inline int handle_write_comp(struct fi_cq_data_entry *cq_entry, nccl_net_
 	NCCL_OFI_TRACE_RECV_SEGMENT_COMPLETE(req->dev_id, rail_id, req->comm, cq_entry->len, req, req->msg_seq_num);
 
 	return 0;
+}
+
+
+/**
+ * @brief	Handle completion for a remote write event
+ */
+static inline int handle_write_comp(struct fi_cq_data_entry *cq_entry, fi_addr_t src_addr,
+				    nccl_net_ofi_rdma_device_t *device, uint16_t rail_id)
+{
+	uint32_t comm_id = GET_COMM_ID_FROM_IMM(cq_entry->data);
+	nccl_net_ofi_comm_t *comm = device->rdma_device_get_comm(comm_id);
+	if (OFI_UNLIKELY(comm == nullptr)) {
+		/* Received write-immediate completion for non-existent recv
+		   communicator. This should never happen, since the domain
+		   should have been invalidated in this case */
+		NCCL_OFI_WARN("Received write-immediate message for non-existent comm (%u)",
+			      comm_id);
+		return -EINVAL;
+	}
+
+	uint16_t msg_seq_num = GET_SEQ_NUM_FROM_IMM(cq_entry->data);
+	uint64_t total_segms = GET_NUM_SEG_FROM_IMM(cq_entry->data);
+	size_t len = cq_entry->len;
+
+	if (comm->type == NCCL_NET_OFI_RECV_COMM) {
+		auto *r_comm = reinterpret_cast<nccl_net_ofi_rdma_recv_comm_t *>(comm);
+		return rdma_handle_write_completion(device, r_comm, msg_seq_num, total_segms, len);
+	}
+#if HAVE_GIN
+	else if (comm->type == NCCL_NET_OFI_GIN_COMM) {
+		auto *gin_comm = static_cast<nccl_ofi_gin_comm *>(comm);
+		return gin_handle_signal_write_completion(gin_comm, src_addr, rail_id, msg_seq_num,
+							  total_segms, len);
+	}
+#endif
+	else {
+		NCCL_OFI_WARN("Invalid comm type");
+		return -EINVAL;
+	}
 }
 
 /**
@@ -1222,6 +1256,7 @@ static nccl_net_ofi_rdma_req_t *rdma_context_get_req(nccl_net_ofi_context_t *ctx
  */
 static inline int rdma_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 					   struct fi_cq_entry *cq_entry_base,
+					   fi_addr_t src_addr,
 					   uint16_t rail_id)
 {
 	int ret = 0;
@@ -1267,7 +1302,7 @@ static inline int rdma_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 		nccl_net_ofi_rdma_device_t *device =
 		get_rx_buff_data(req)->ep->rdma_endpoint_get_device();
 		/* Receive completions */
-		ret = handle_rx_buff_recv(device, rail_id, cq_entry, req,
+		ret = handle_rx_buff_recv(device, rail_id, cq_entry, src_addr, req,
 					  comp_flags & FI_REMOTE_CQ_DATA);
 
 	} else if (comp_flags & FI_WRITE) {
@@ -1346,6 +1381,7 @@ static inline int rdma_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 
 
 static inline int rdma_process_completions(struct fi_cq_data_entry *cq_entry,
+					   fi_addr_t *src_addrs,
 					   uint64_t num_cqes,
 					   nccl_net_ofi_rdma_device_t *device,
 					   uint16_t rail_id)
@@ -1357,7 +1393,8 @@ static inline int rdma_process_completions(struct fi_cq_data_entry *cq_entry,
 
 		if (cq_entry[comp_idx].flags & FI_REMOTE_WRITE) {
 
-			ret = handle_write_comp(&cq_entry[comp_idx], device, rail_id);
+			ret = handle_write_comp(&cq_entry[comp_idx], src_addrs[comp_idx],
+						device, rail_id);
 			if (ret != 0) {
 				return ret;
 			}
@@ -1377,7 +1414,7 @@ static inline int rdma_process_completions(struct fi_cq_data_entry *cq_entry,
 							   ofi_ctx);
 
 		ret = ctx->handle_cq_entry(ctx, reinterpret_cast<struct fi_cq_entry *>(&cq_entry[comp_idx]),
-					   rail_id);
+					   src_addrs[comp_idx], rail_id);
 		if (ret != 0) {
 			NCCL_OFI_WARN("Context progress failed: %d", ret);
 			return ret;
@@ -1626,15 +1663,15 @@ static inline int rdma_process_error_entry(struct fi_cq_err_entry *err_entry, st
 static int ofi_process_cq_rail(nccl_net_ofi_rdma_device_t *device, nccl_net_ofi_rdma_domain_rail_t *rail)
 {
 	struct fi_cq_data_entry cqe_buffers[cq_read_count];
+	fi_addr_t src_addrs[cq_read_count];
 	ssize_t rc = 0;
 	int ret = 0;
 
 	while (true) {
 		/* Receive completions for the given endpoint */
-		rc = fi_cq_read(rail->cq.get(), cqe_buffers, cq_read_count);
+		rc = fi_cq_readfrom(rail->cq.get(), cqe_buffers, cq_read_count, src_addrs);
 		if (rc > 0) {
-			ret = rdma_process_completions(cqe_buffers, rc, device, rail->rail_id);
-			if (OFI_UNLIKELY(ret != 0))
+			ret = rdma_process_completions(cqe_buffers, src_addrs, rc, device, rail->rail_id);
 				goto exit;
 		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
 			/*
@@ -1788,6 +1825,7 @@ static inline int free_read_req(nccl_net_ofi_rdma_req_t *req,
 			req, dec_inflight_reqs);
 }
 
+
 /*
  * @brief	Free send request
  */
@@ -1825,6 +1863,7 @@ static inline int free_send_req(nccl_net_ofi_rdma_req_t *req,
 	return free_base_req(&s_comm->num_inflight_reqs, s_comm->nccl_ofi_reqs_fl,
 			req, dec_inflight_reqs);
 }
+
 
 /*
  * @brief	Free receive request
@@ -2712,22 +2751,8 @@ static int reg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
 			      (nccl_net_ofi_rdma_mr_handle_t **)mhandle);
 }
 
-typedef struct {
-	nccl_net_ofi_rdma_mr_handle_t *mr_handle;
-	nccl_net_ofi_rdma_domain_t *domain;
-} freelist_regmr_fn_handle_t;
 
-/**
- * Register host memory for use with the given communicator
- *
- * This interface is suitable for use with freelist_init_mr.
- *
- * @param	data
- *		Pointer to memory region. Must be aligned to page size.
- * @param	size
- *		Size of memory region. Must be a multiple of page size.
- */
-static int freelist_regmr_host_fn(void *domain_void_ptr, void *data, size_t size, void **handle)
+int freelist_regmr_host_fn(void *domain_void_ptr, void *data, size_t size, void **handle)
 {
 	nccl_net_ofi_rdma_domain_t *domain = (nccl_net_ofi_rdma_domain_t *)domain_void_ptr;
 
@@ -2753,12 +2778,8 @@ static int freelist_regmr_host_fn(void *domain_void_ptr, void *data, size_t size
 	return 0;
 }
 
-/**
- * Deregister host memory registered with freelist_regmr_host_fn
- *
- * This interface is suitable for use with a freelist.
- */
-static int freelist_deregmr_host_fn(void *handle)
+
+int freelist_deregmr_host_fn(void *handle)
 {
 	freelist_regmr_fn_handle_t *freelist_handle = (freelist_regmr_fn_handle_t *)handle;
 	assert(freelist_handle);
@@ -6913,6 +6934,9 @@ static void get_hints(struct fi_info *hints)
 	 * rx buffer cleanup and if peer to peer is disabled at
 	 * the NCCL level.  */
 	hints->caps |= FI_LOCAL_COMM | FI_REMOTE_COMM;
+
+	/* GIN currently requires completions source information */
+	hints->caps |= FI_SOURCE;
 
 	hints->mode = FI_CONTEXT | FI_CONTEXT2;
 

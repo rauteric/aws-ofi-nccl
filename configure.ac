@@ -134,6 +134,12 @@ CHECK_PKG_NVTX()
 CHECK_PKG_HWLOC([],
 		[AC_MSG_ERROR([Could not find the hwloc library. Use --with-hwloc to provide the path to non-standard hwloc installation.])])
 
+CHECK_PKG_GDRCOPY([found_gdrcopy="yes"], [found_gdrcopy="no"])
+
+# GDRCopy is a requirement for the GIN plugin
+AS_IF([test "${found_gdrcopy}" == "yes"], [AC_DEFINE([HAVE_GIN], [1], [Defined to 1 if GIN code is compiled in])])
+AM_CONDITIONAL([ENABLE_GIN], [test "${found_gdrcopy}" == "yes"])
+
 CHECK_PKG_VALGRIND()
 CHECK_VAR_REDZONE()
 

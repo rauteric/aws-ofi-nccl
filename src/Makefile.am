@@ -36,6 +36,13 @@ sources = \
 	nccl_ofi_platform.cpp \
 	tracepoint.cpp
 
+if ENABLE_GIN
+sources += \
+	gin/nccl_ofi_gin.cpp \
+	gin/nccl_ofi_gin_allgather.cpp \
+	gin/nccl_ofi_gin_api.cpp
+endif
+
 if WANT_PLATFORM_AWS
 sources += platform-aws.cpp
 endif

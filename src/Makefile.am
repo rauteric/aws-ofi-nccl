@@ -14,6 +14,11 @@ sources = \
 	cm/nccl_ofi_cm.cpp \
 	cm/nccl_ofi_cm_resources.cpp \
 	cm/nccl_ofi_cm_reqs.cpp \
+  gin/nccl_ofi_gin_allgather.cpp \
+	gin/nccl_ofi_gin_api.cpp \
+	gin/nccl_ofi_gin_resources.cpp \
+	gin/nccl_ofi_gin_reqs.cpp \
+	gin/nccl_ofi_gin.cpp \
 	nccl_ofi_api.cpp \
 	nccl_ofi_assert.cpp \
 	nccl_ofi_compat.cpp \

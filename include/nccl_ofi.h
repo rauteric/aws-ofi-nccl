@@ -292,6 +292,12 @@ public:
 	 */
 	virtual struct fi_info *get_ofi_info_for_cm() = 0;
 
+	/**
+	 * Retrieve all fi_info objects associated with this device. There may
+	 * be more than one info per device, depending on the transport.
+	 */
+	virtual std::vector<struct fi_info *> get_ofi_infos() = 0;
+
 	/* Retrieve a domain associated with this device.  There may
 	 * be more than one domain per device, depending on a number
 	 * of performance tradeoffs (be sure to read the domain
@@ -422,6 +428,14 @@ public:
 	 * associated with the "leader NIC".
 	 */
 	virtual ofi_domain_ptr &get_ofi_domain_for_cm() = 0;
+
+	/**
+	 * Retrieve the fid_domain objects associated with this plugin domain.
+	 *
+	 * There may be more than one fid_domain per domain, depending on the
+	 * transport.
+	 */
+	virtual std::vector<ofi_domain_ptr *> get_ofi_domains() = 0;
 
 	/* Create a new endpoint
 	 *

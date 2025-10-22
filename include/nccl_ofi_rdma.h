@@ -725,6 +725,18 @@ public:
 		return domain_rails[0].domain;
 	}
 
+	inline std::vector<ofi_domain_ptr &> get_ofi_domains() override
+	{
+		std::vector<ofi_domain_ptr &> ret_domains;
+		ret_domains.reserve(domain_rails.size());
+
+		for (auto &rail : domain_rails) {
+			ret_domains.push_back(rail.domain);
+		}
+
+		return ret_domains;
+	}
+
 	inline ofi_cq_ptr &get_ofi_cq_for_cm() override
 	{
 		assert(!domain_rails.empty());

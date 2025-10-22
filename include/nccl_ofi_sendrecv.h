@@ -125,7 +125,14 @@ public:
 	{
 		return domain;
 	}
-	
+
+	inline std::vector<ofi_domain_ptr &> get_ofi_domains() override
+	{
+		std::vector<ofi_domain_ptr &> ret_domains;
+		ret_domains.push_back(domain);
+		return ret_domains;
+	}
+
 	inline ofi_cq_ptr &get_ofi_cq_for_cm() override
 	{
 		return cq;

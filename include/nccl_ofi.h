@@ -457,6 +457,14 @@ public:
 	virtual ofi_domain_ptr &get_ofi_domain_for_cm() = 0;
 
 	/**
+	 * Retrieve the fid_domain objects associated with this plugin domain.
+	 *
+	 * There may be more than one fid_domain per domain, depending on the
+	 * transport.
+	 */
+	virtual std::vector<ofi_domain_ptr &> get_ofi_domains() = 0;
+
+	/**
 	 * Retrieve an fid_cq object associated with this domain to be used for 
 	 * connection management. There may be more than one fid_cq per domain, depending
 	 * on the transport; in that case, this will be the cq object associated with the

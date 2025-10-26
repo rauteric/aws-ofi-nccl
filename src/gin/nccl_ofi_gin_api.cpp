@@ -96,9 +96,9 @@ static ncclResult_t nccl_ofi_gin_listen(void* ctx, int dev, void* handle, void**
 	}
 
 	/* Note: although the GIN plugin uses its own endpoint type, we still need
-	   the RDMA transport endpoint to set up the bootstrap AG ring. */
-	nccl_net_ofi_ep_t *ep = device->get_ep();
-	assert(ep != nullptr);
+	   the transport endpoint to set up the bootstrap AG ring. */
+	nccl_net_ofi_domain_t *domain = device->get_domain();
+	nccl_net_ofi_ep_t *ep = domain->get_ep();
 
 	nccl_net_ofi_listen_comm_t *l_comm = nullptr;
 	int ret = ep->listen(static_cast<nccl_net_ofi_conn_handle_t *>(handle), &l_comm);
@@ -109,6 +109,7 @@ static ncclResult_t nccl_ofi_gin_listen(void* ctx, int dev, void* handle, void**
 
 	*listenComm = new nccl_ofi_gin_listen_comm {
 		.dev = dev,
+		.domain = domain,
 		.ep = ep,
 		.l_comm = l_comm
 	};

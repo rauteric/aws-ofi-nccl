@@ -9,7 +9,6 @@
 #include <stdint.h>
 
 #include "nccl_ofi_assert.h"
-#include "nccl_ofi_rdma.h"
 
 struct nccl_ofi_gin_comm;
 typedef struct nccl_ofi_gin_comm nccl_ofi_gin_comm_t;
@@ -20,13 +19,13 @@ struct nccl_net_ofi_gin_iputsignal_recv_req;
 struct nccl_ofi_gin_ep_t;
 struct nccl_ofi_gin_ep_rail_t;
 
-struct nccl_net_ofi_rdma_signal_metadata_msg_t {
+struct nccl_net_ofi_gin_signal_metadata_msg_t {
 	/* Message sequence number */
-	uint32_t msg_seq_num:NCCL_OFI_RDMA_SEQ_BITS;
+	uint32_t msg_seq_num;
 
 	/* A comm identitifer that uniquely identifies the comm
 	* on the receiver side */
-	uint32_t remote_comm_id:NCCL_OFI_RDMA_COMM_ID_BITS;
+	uint32_t remote_comm_id;
 
 	uint32_t num_segments;
 

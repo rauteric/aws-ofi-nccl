@@ -19,6 +19,7 @@
 struct nccl_ofi_gin_listen_comm
 {
 	int dev;
+	nccl_net_ofi_domain_t *domain;
 	nccl_net_ofi_ep_t *ep;
 	nccl_net_ofi_listen_comm_t *l_comm;
 };
@@ -216,7 +217,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, rdma_gin_sym_mr
 		   uint64_t signalValue, uint32_t signalOp, nccl_net_ofi_req_t** request);
 
 int gin_handle_signal_metadata_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t src_addr, uint16_t rail_id,
-					  const nccl_net_ofi_rdma_signal_metadata_msg_t *metadata_msg);
+					  const nccl_net_ofi_gin_signal_metadata_msg_t *metadata_msg);
 
 int gin_handle_signal_write_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t src_addr, uint16_t rail_id,
 				       uint16_t msg_seq_num, uint64_t total_segms, size_t len);

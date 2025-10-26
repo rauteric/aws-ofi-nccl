@@ -77,7 +77,7 @@ int nccl_net_ofi_gin_recv_req_t::handle_cq_entry(nccl_net_ofi_context_t *_ctx,
 
 	auto *cq_entry = reinterpret_cast<struct fi_cq_data_entry *>(cq_entry_base);
 
-	auto *rdma_domain = gin_ep->domain;
+	auto *domain = gin_ep->domain;
 
 	int ret = 0;
 
@@ -88,36 +88,25 @@ int nccl_net_ofi_gin_recv_req_t::handle_cq_entry(nccl_net_ofi_context_t *_ctx,
 		/* RDMA write-immediate completion */
 		uint32_t comm_id = GET_COMM_ID_FROM_IMM(cq_entry->data);
 
-		auto *gin_comm = static_cast<nccl_ofi_gin_comm_t *>(
-			rdma_domain->rdma_domain_get_device()->
-				rdma_device_get_comm(comm_id)
-		);
+		auto &gin_comm = gin_ep->get_comm(comm_id);
 
 		uint16_t msg_seq_num = GET_SEQ_NUM_FROM_IMM(cq_entry->data);
 		uint64_t total_segms = GET_NUM_SEG_FROM_IMM(cq_entry->data);
 		size_t len = cq_entry->len;
 
 		ret = gin_handle_signal_write_completion
-			(gin_comm, src_addr, rail_id_arg, msg_seq_num, total_segms, len);
+			(&gin_comm, src_addr, rail_id_arg, msg_seq_num, total_segms, len);
 		if (ret != 0) {
 			return ret;
 		}
 	} else {
-		auto *msg = static_cast<nccl_net_ofi_rdma_signal_metadata_msg_t *>(rx_buff_elem->ptr);
+		auto *msg = static_cast<nccl_net_ofi_gin_signal_metadata_msg_t *>(rx_buff_elem->ptr);
 
 		/* Get the gin comm */
-		auto *gin_comm = static_cast<nccl_ofi_gin_comm_t *>(
-			rdma_domain->rdma_domain_get_device()->
-				rdma_device_get_comm(msg->remote_comm_id)
-		);
-
-		if (gin_comm == nullptr) {
-			NCCL_OFI_WARN("Failed to get gin comm");
-			return -EINVAL;
-		}
+		auto &gin_comm = gin_ep->get_comm(msg->remote_comm_id);
 
 		ret = gin_handle_signal_metadata_completion
-			(gin_comm, src_addr, rail_id_arg, msg);
+			(&gin_comm, src_addr, rail_id_arg, msg);
 		if (ret != 0) {
 			NCCL_OFI_WARN("gin_handle_signal_metadata_completion failure");
 			return ret;
@@ -130,10 +119,10 @@ int nccl_net_ofi_gin_recv_req_t::handle_cq_entry(nccl_net_ofi_context_t *_ctx,
 
 int nccl_net_ofi_gin_recv_req_t::post()
 {
-	nccl_net_ofi_rdma_mr_handle_t *mr_handle = static_cast<freelist_regmr_fn_handle_t *>
+	nccl_ofi_gin_mr_handle_t *mr_handle = static_cast< *>
 		(rx_buff_elem->mr_handle)->mr_handle;
 	struct fid_ep *ofi_ep = rail->ofi_ep.get();
-	size_t size = sizeof(nccl_net_ofi_rdma_signal_metadata_msg_t);
+	size_t size = sizeof(nccl_net_ofi_gin_signal_metadata_msg_t);
 	void *desc = fi_mr_desc(mr_handle->mr[rail->rail_id].get());
 
 	auto op = [=] {

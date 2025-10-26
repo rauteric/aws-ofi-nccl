@@ -23,7 +23,7 @@ struct nccl_net_ofi_gin_iputsignal_recv_req
 	uint32_t num_seg_completions;
 
 	bool metadata_received;
-	nccl_net_ofi_rdma_signal_metadata_msg_t metadata;
+	nccl_net_ofi_gin_signal_metadata_msg_t metadata;
 };
 
 struct nccl_net_ofi_gin_iputsignal_req_t {

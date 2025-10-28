@@ -82,6 +82,17 @@ static inline int rail_addr_insert(nccl_ofi_gin_ep_rail_t &rail, const nccl_ofi_
 }
 
 
+static inline void set_rail_address(nccl_ofi_gin_ep_rail_t &rail, nccl_ofi_addr &out_addr)
+{
+	out_addr.addr_len = MAX_EP_ADDR;
+	int ret = fi_getname(&rail.ofi_ep.get()->fid, out_addr.addr, &out_addr.addr_len);
+	if (ret != 0) {
+		NCCL_OFI_WARN("fi_getname failed; RC: %d", ret);
+		throw std::runtime_error("fi_getname failed");
+	}
+}
+
+
 int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[],
 		int nranks, int rank, nccl_ofi_gin_listen_comm* gin_l_comm,
 		nccl_ofi_gin_comm** gin_comm_out)
@@ -136,27 +147,12 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 	my_gin_handle.num_rails = num_rails;
 	my_gin_handle.num_control_rails = num_control_rails;
 	for (int i = 0; i < num_rails; ++i) {
-		nccl_ofi_gin_ep_rail_t &rail = gin_ep->rails[i];
-		nccl_ofi_addr &out_name = my_gin_handle.ep_names[i];
-		out_name.ep_name_len = MAX_EP_ADDR;
-		ret = fi_getname(&rail.ofi_ep.get()->fid, out_name.ep_name, &out_name.ep_name_len);
-		if (ret != 0) {
-			NCCL_OFI_WARN("fi_getname failed; RC: %d", ret);
-			delete gin_ep;
-			return ret;
-		}
+		set_rail_address(gin_ep->rails[i], my_gin_handle.ep_names[i]);
 	}
 	for (int i = 0; i < num_control_rails; ++i) {
-		nccl_ofi_gin_ep_rail_t &rail = gin_ep->control_rails[i];
-		nccl_ofi_addr &out_name = my_gin_handle.control_ep_names[i];
-		out_name.ep_name_len = MAX_EP_ADDR;
-		ret = fi_getname(&rail.ofi_ep.get()->fid, out_name.ep_name, &out_name.ep_name_len);
-		if (ret != 0) {
-			NCCL_OFI_WARN("fi_getname failed; RC: %d", ret);
-			delete gin_ep;
-			return ret;
-		}
+		set_rail_address(gin_ep->control_rails[i], my_gin_handle.control_ep_names[i]);
 	}
+
 	set_write_ack_buff_info(gin_ep, my_gin_handle);
 
 	nccl_ofi_gin_comm *gin_comm = new nccl_ofi_gin_comm
@@ -687,12 +683,12 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, rdma_gin_sym_mr
 		write_req = new nccl_net_ofi_gin_tx_req_t();
 
 		void *src = reinterpret_cast<void *>(srcMhandle->remote_mr[gin_comm->rank].address + srcOff);
-		auto *src_mhandle = static_cast<nccl_net_ofi_rdma_mr_handle_t *>(srcMhandle->local_comm_handle);
+		//auto *src_mhandle = static_cast<nccl_net_ofi_rdma_mr_handle_t *>(srcMhandle->local_comm_handle);
 		void *desc = fi_mr_desc(src_mhandle->mr[rail_id].get());
 
 		auto &dest_remote_mr = dstMhandle->remote_mr[rank];
 		uint64_t dest = dest_remote_mr.address + dstOff;
-		uint64_t data = GET_RDMA_WRITE_IMM_DATA(remote_comm_id, msg_seq_num, nseg);
+		//uint64_t data = GET_RDMA_WRITE_IMM_DATA(remote_comm_id, msg_seq_num, nseg);
 
 		auto op = [=]() {
 			ssize_t rc = fi_writedata(gin_ep->rails[rail_id].ofi_ep.get(), src, size, desc, data,
@@ -813,8 +809,7 @@ int nccl_ofi_gin_comm::process_pending_reqs()
 
 int nccl_ofi_gin_comm::progress()
 {
-	auto *domain = ep->domain;
-	int ret = domain->ofi_process_cq();
+	int ret = ep->process_cq();
 	if (ret != 0) {
 		return ret;
 	}

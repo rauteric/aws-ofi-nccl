@@ -65,20 +65,20 @@ struct nccl_ofi_gin_rank_comm
 };
 
 
-struct rdma_gin_remote_mr
+struct gin_remote_mr
 {
 	uintptr_t address;
 	int num_rails;
 	uint64_t mr_key[MAX_NUM_RAILS];
 };
 
-struct rdma_gin_sym_mr_handle
+struct gin_sym_mr_handle
 {
 	/* Local address of memory registration */
 	void *addr;
 	size_t size;
 
-	/* Handle to local memory registration (rdma_mr_handle_t) */
+	/* Handle to local memory registration */
 	void *local_comm_handle;
 	/* Type of registration (NCCL_PTR_HOST, NCCL_PTR_CUDA) */
 	int type;
@@ -91,7 +91,7 @@ struct rdma_gin_sym_mr_handle
 	size_t gdr_reglen;
 
 	/* Remote MR information for each peer rank */
-	std::vector<rdma_gin_remote_mr> remote_mr;
+	std::vector<gin_remote_mr> remote_mr;
 };
 
 
@@ -137,7 +137,7 @@ struct nccl_ofi_gin_comm : nccl_net_ofi_comm_t
 
 	   TODO: we could also just pass this in the handle to avoid a map
 	   lookup. Not sure yet if that is the right thing to do. */
-	std::unordered_map<void *, rdma_gin_sym_mr_handle *> mr_handle_map;
+	std::unordered_map<void *, gin_sym_mr_handle *> mr_handle_map;
 
 	/* For rail scheduling. Currently we do round-robin among rails.
 	   TODO:
@@ -207,13 +207,13 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 int nccl_ofi_gin_allgather(struct nccl_ofi_gin_comm *comm, void *data, size_t size);
 
 int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int type, uint64_t offset,
-		       int fd, uint64_t mrFlags, rdma_gin_sym_mr_handle** mr_handle_out);
+		       int fd, uint64_t mrFlags, gin_sym_mr_handle** mr_handle_out);
 
-int gin_deregMrSym(nccl_ofi_gin_comm* comm, rdma_gin_sym_mr_handle* mr_handle);
+int gin_deregMrSym(nccl_ofi_gin_comm* comm, gin_sym_mr_handle* mr_handle);
 
-int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, rdma_gin_sym_mr_handle* srcMhandle,
-		   size_t size, uint64_t dstOff, rdma_gin_sym_mr_handle* dstMhandle,
-		   uint32_t rank, uint64_t signalOff, rdma_gin_sym_mr_handle* signalMhandle,
+int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_handle* srcMhandle,
+		   size_t size, uint64_t dstOff, gin_sym_mr_handle* dstMhandle,
+		   uint32_t rank, uint64_t signalOff, gin_sym_mr_handle* signalMhandle,
 		   uint64_t signalValue, uint32_t signalOp, nccl_net_ofi_req_t** request);
 
 int gin_handle_signal_metadata_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t src_addr, uint16_t rail_id,

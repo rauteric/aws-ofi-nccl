@@ -139,7 +139,7 @@ static ncclResult_t nccl_ofi_gin_regMrSymDmaBuf(void* collComm, void* data, size
 						void** mhandle, void **ginHandle)
 {
 	auto *comm = static_cast<nccl_ofi_gin_comm *>(collComm);
-	rdma_gin_sym_mr_handle *mr_handle = nullptr;
+	gin_sym_mr_handle *mr_handle = nullptr;
 
 	int ret = gin_regMrSymDmaBuf(comm, data, size, type, offset, fd, mrFlags, &mr_handle);
 	if (ret != 0) {
@@ -163,7 +163,7 @@ static ncclResult_t nccl_ofi_gin_regMrSym(void* collComm, void* data, size_t siz
 static ncclResult_t nccl_ofi_gin_deregMrSym(void* collComm, void* mhandle)
 {
 	auto *comm = static_cast<nccl_ofi_gin_comm *>(collComm);
-	auto *mr_handle = static_cast<rdma_gin_sym_mr_handle *>(mhandle);
+	auto *mr_handle = static_cast<gin_sym_mr_handle *>(mhandle);
 
 	int ret = gin_deregMrSym(comm, mr_handle);
 	if (ret != 0) {
@@ -221,9 +221,9 @@ static ncclResult_t nccl_ofi_gin_iputSignal(void* collComm, uint64_t srcOff, voi
 					    uint64_t signalValue, uint32_t signalOp, void** request)
 {
 	auto *gin_comm = static_cast<nccl_ofi_gin_comm *>(collComm);
-	auto *src_mr_handle = static_cast<rdma_gin_sym_mr_handle *>(srcMhandle);
-	auto *dst_mr_handle = static_cast<rdma_gin_sym_mr_handle *>(dstMhandle);
-	auto *signal_mr_handle = static_cast<rdma_gin_sym_mr_handle *>(signalMhandle);
+	auto *src_mr_handle = static_cast<gin_sym_mr_handle *>(srcMhandle);
+	auto *dst_mr_handle = static_cast<gin_sym_mr_handle *>(dstMhandle);
+	auto *signal_mr_handle = static_cast<gin_sym_mr_handle *>(signalMhandle);
 
 	nccl_net_ofi_req_t *req = nullptr;
 	int ret = gin_iputSignal(gin_comm, srcOff, src_mr_handle, size, dstOff, dst_mr_handle,

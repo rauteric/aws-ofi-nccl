@@ -9,6 +9,31 @@
 #include "nccl_ofi.h"
 #include "nccl_ofi_log.h"
 
+
+static inline int gin_freelist_regmr_fn(void *ep_ptr, void *data, size_t size, void **mhandle)
+{
+	auto ep = static_cast<nccl_ofi_gin_ep_t *>(ep_ptr);
+	auto ckey = nccl_ofi_mr_ckey_mk_vec(data, size);
+	nccl_ofi_gin_mr_handle_t *mr_handle = nullptr;
+	int ret = ep->reg_mr(&ckey, size, &mr_handle);
+	if (ret != 0) {
+		return ret;
+	}
+
+	*mhandle = mr_handle;
+	return ret;
+}
+
+static inline int gin_freelist_deregmr_fn(void *handle)
+{
+	auto mr_handle = static_cast<nccl_ofi_gin_mr_handle_t *>(handle);
+
+	delete mr_handle;
+
+	return 0;
+}
+
+
 nccl_ofi_gin_ep_t::nccl_ofi_gin_ep_t(nccl_net_ofi_domain_t *domain_arg) :
 	domain(domain_arg),
 	rx_buff_fl(nullptr, &freelist_deleter)
@@ -28,7 +53,7 @@ nccl_ofi_gin_ep_t::nccl_ofi_gin_ep_t(nccl_net_ofi_domain_t *domain_arg) :
 	int ret = nccl_ofi_freelist_init_mr
 		(sizeof(nccl_net_ofi_gin_signal_metadata_msg_t),
 		 num_buffers * 2 /* x2 for data + ctrl */, 0, num_buffers * 2,
-		 nullptr, nullptr, freelist_regmr_host_fn, freelist_deregmr_host_fn, domain,
+		 nullptr, nullptr, gin_freelist_regmr_fn, gin_freelist_deregmr_fn, domain,
 		 1, &rx_buff_fl_tmp);
 	if (ret != 0) {
 		throw std::runtime_error("Failed to init rx_buff_fl");
@@ -261,16 +286,16 @@ int nccl_ofi_gin_ep_t::reg_mr(nccl_ofi_mr_ckey_ref ckey, int type, nccl_ofi_gin_
 
 	*mhandle = NULL;
 
-	auto ret_handle = std::make_unique<nccl_ofi_gin_mr_handle_t>(num_rails);
-
+	uint64_t mr_key = 0;
 	if (key_pool->get_size() != 0) {
-		auto key = key_pool->allocate_id();
-		if (OFI_UNLIKELY(key == FI_KEY_NOTAVAIL)) {
+		mr_key = key_pool->allocate_id();
+		if (OFI_UNLIKELY(mr_key == FI_KEY_NOTAVAIL)) {
 			NCCL_OFI_WARN("MR key allocation failed");
 			return -ENOMEM;
 		}
-		ret_handle->mr_key = static_cast<uint64_t>(key);
 	}
+
+	auto ret_handle = std::make_unique<nccl_ofi_gin_mr_handle_t>(num_rails, mr_key);
 
 	ret = set_mr_req_attr(ret_handle->mr_key, ckey, &regattr_flags, type, &mr_attr);
 	if (OFI_UNLIKELY(ret != 0)) {
@@ -301,12 +326,6 @@ void nccl_ofi_gin_ep_t::dereg_mr(nccl_ofi_gin_mr_handle_t *handle_ptr)
 {
 	if (OFI_UNLIKELY(handle_ptr == NULL)) {
 		return;
-	}
-
-	auto *mr_rkey_pool = domain->mr_rkey_pool;
-
-	if (mr_rkey_pool->get_size() != 0) {
-		mr_rkey_pool->free_id(handle_ptr->mr_key);
 	}
 
 	delete handle_ptr;

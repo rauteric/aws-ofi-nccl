@@ -48,4 +48,16 @@ struct nccl_ofi_gin_ctx {
 	}
 };
 
+/**
+ * Format of immediate data:
+ * 
+ * | 2-bit segment count | 20-bit comm ID | 10-bit msg_seq_num |
+ */
+#define GIN_IMM_COMM_SHIFT 10
+#define GIN_IMM_SEG_SHIFT 30
+#define GIN_IMM_NUM_SEG_BITS 2
+#define GIN_IMM_GET_SEG_CNT(data) ((data) >> GIN_IMM_SEG_SHIFT)
+#define GIN_IMM_GET_IMM_DATA(comm_id, msg_seq_num, nseg) \
+	(((nseg) << GIN_IMM_SEG_SHIFT) | ((comm_id) << GIN_IMM_COMM_SHIFT) | (msg_seq_num))
+
 #endif

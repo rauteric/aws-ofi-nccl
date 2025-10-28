@@ -19,7 +19,7 @@
  *
  * TODO something better?
  */
-#define WRITEDATA_ACK_NSEG ((1 << NUM_NUM_SEG_BITS) - 1)
+#define WRITEDATA_ACK_NSEG ((1 << GIN_IMM_NUM_SEG_BITS) - 1)
 
 
 struct gin_connect_handle
@@ -218,7 +218,7 @@ static inline int writedata_ack(nccl_ofi_gin_comm *gin_comm, unsigned int peer_r
 
 	auto &rank_comm = gin_comm->rank_comms[peer_rank];
 	uint32_t peer_comm_id = rank_comm.comm_id;
-	//uint32_t imm_data = GET_RDMA_WRITE_IMM_DATA(peer_comm_id, msg_seq_num, WRITEDATA_ACK_NSEG);
+	uint32_t imm_data = GIN_IMM_GET_IMM_DATA(peer_comm_id, msg_seq_num, WRITEDATA_ACK_NSEG);
 
 	auto *domain = gin_comm->ep->domain;
 	auto *ofi_ep = gin_comm->ep->control_rails[rail_id].ofi_ep.get();
@@ -265,7 +265,7 @@ static inline int do_gin_signal(nccl_ofi_gin_comm *gin_comm,
 		NCCL_OFI_WARN("Signal base address %p not found in MR handle map", signal_base);
 		return -EINVAL;
 	}
-	rdma_gin_sym_mr_handle *mr_handle = it->second;
+	gin_sym_mr_handle *mr_handle = it->second;
 
 	if (mr_handle->type == NCCL_PTR_CUDA) {
 		auto *d_ptr = reinterpret_cast<uint64_t*>(
@@ -465,7 +465,7 @@ int gin_handle_signal_metadata_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t
 }
 
 int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int type, uint64_t offset,
-		       int fd, uint64_t mrFlags, rdma_gin_sym_mr_handle** mr_handle_out)
+		       int fd, uint64_t mrFlags, gin_sym_mr_handle** mr_handle_out)
 {
 	auto *gin_ep = comm->ep;
 	void *local_handle = nullptr;
@@ -480,13 +480,13 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int typ
 		return -EIO;
 	}
 
-	auto *mr_handle = new rdma_gin_sym_mr_handle{};
+	auto *mr_handle = new gin_sym_mr_handle{};
 	mr_handle->addr = data;
 	mr_handle->size = size;
 	mr_handle->local_comm_handle = local_handle;
 	mr_handle->remote_mr.resize(comm->nranks, {});
 	mr_handle->type = type;
-	rdma_gin_remote_mr &my_remote_mr = mr_handle->remote_mr[comm->rank];
+	gin_remote_mr &my_remote_mr = mr_handle->remote_mr[comm->rank];
 
 	my_remote_mr.address = reinterpret_cast<uintptr_t>(data);
 	my_remote_mr.num_rails = gin_ep->num_rails;
@@ -533,7 +533,7 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int typ
 	}
 
 	int iret = nccl_ofi_gin_allgather(comm, mr_handle->remote_mr.data(),
-					  sizeof(rdma_gin_remote_mr));
+					  sizeof(gin_remote_mr));
 	if (iret != 0) {
 		comm->mr_handle_map.erase(data);
 		delete mr_handle;
@@ -544,7 +544,7 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int typ
 	return 0;
 }
 
-int gin_deregMrSym(nccl_ofi_gin_comm* comm, rdma_gin_sym_mr_handle* mr_handle)
+int gin_deregMrSym(nccl_ofi_gin_comm* comm, gin_sym_mr_handle* mr_handle)
 {
 	if (mr_handle->type == NCCL_PTR_CUDA) {
 		int iret = gdr_unmap(comm->gdr_handle, mr_handle->gdr_mr_handle, mr_handle->gdr_mapped_ptr,
@@ -636,9 +636,9 @@ static int gin_iputsignal_req_test(nccl_net_ofi_req_t *base_req, int *done, int 
 	return 0;
 }
 
-int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, rdma_gin_sym_mr_handle* srcMhandle,
-		   size_t size, uint64_t dstOff, rdma_gin_sym_mr_handle* dstMhandle,
-		   uint32_t rank, uint64_t signalOff, rdma_gin_sym_mr_handle* signalMhandle,
+int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_handle* srcMhandle,
+		   size_t size, uint64_t dstOff, gin_sym_mr_handle* dstMhandle,
+		   uint32_t rank, uint64_t signalOff, gin_sym_mr_handle* signalMhandle,
 		   uint64_t signalValue, uint32_t signalOp, nccl_net_ofi_req_t** request)
 {
 	if (signalOp != 0 /* null op */ && signalOp != NCCL_NET_SIGNAL_OP_INC &&
@@ -683,12 +683,12 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, rdma_gin_sym_mr
 		write_req = new nccl_net_ofi_gin_tx_req_t();
 
 		void *src = reinterpret_cast<void *>(srcMhandle->remote_mr[gin_comm->rank].address + srcOff);
-		//auto *src_mhandle = static_cast<nccl_net_ofi_rdma_mr_handle_t *>(srcMhandle->local_comm_handle);
+		auto *src_mhandle = static_cast<nccl_ofi_gin_mr_handle_t *>(srcMhandle->local_comm_handle);
 		void *desc = fi_mr_desc(src_mhandle->mr[rail_id].get());
 
 		auto &dest_remote_mr = dstMhandle->remote_mr[rank];
 		uint64_t dest = dest_remote_mr.address + dstOff;
-		//uint64_t data = GET_RDMA_WRITE_IMM_DATA(remote_comm_id, msg_seq_num, nseg);
+		uint64_t data = GIN_IMM_GET_IMM_DATA(remote_comm_id, msg_seq_num, nseg);
 
 		auto op = [=]() {
 			ssize_t rc = fi_writedata(gin_ep->rails[rail_id].ofi_ep.get(), src, size, desc, data,

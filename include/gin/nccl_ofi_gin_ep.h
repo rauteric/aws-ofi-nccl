@@ -18,16 +18,28 @@ static inline void freelist_deleter(nccl_ofi_freelist_t *fl)
 	int ret = nccl_ofi_freelist_fini(fl);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Failed to finalize freelist");
-		assert(false); abort();
+		assert(false);
 	}
 }
 
 class nccl_ofi_gin_mr_handle_t : public nccl_net_ofi_mr_handle_t
 {
+private:
+	/* Back-pointer to GIN ep */
+	nccl_ofi_gin_ep_t *ep;
 public:
-	nccl_ofi_gin_mr_handle_t(size_t num_rails) : nccl_net_ofi_mr_handle_t(0),
-						     mr(num_rails)
+	nccl_ofi_gin_mr_handle_t(size_t num_rails, uint64_t mr_key_arg) :
+		nccl_net_ofi_mr_handle_t(mr_key_arg), mr(num_rails)
 	{
+	}
+
+	~nccl_ofi_gin_mr_handle_t()
+	{
+		auto *mr_rkey_pool = ep->domain->mr_rkey_pool;
+
+		if (mr_rkey_pool->get_size() != 0) {
+			mr_rkey_pool->free_id(this->mr_key);
+		}
 	}
 
 	/**

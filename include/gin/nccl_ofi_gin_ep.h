@@ -6,8 +6,9 @@
 #define NCCL_OFI_GIN_EP_H
 
 #include "rdma/fabric.h"
-#include <vector>
+#include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
 #include "nccl_ofi_freelist.h"
 #include "gin/nccl_ofi_gin_types.h"
@@ -22,35 +23,6 @@ static inline void freelist_deleter(nccl_ofi_freelist_t *fl)
 	}
 }
 
-class nccl_ofi_gin_mr_handle_t : public nccl_net_ofi_mr_handle_t
-{
-private:
-	/* Back-pointer to GIN ep */
-	nccl_ofi_gin_ep_t *ep;
-public:
-	nccl_ofi_gin_mr_handle_t(size_t num_rails, uint64_t mr_key_arg) :
-		nccl_net_ofi_mr_handle_t(mr_key_arg), mr(num_rails)
-	{
-	}
-
-	~nccl_ofi_gin_mr_handle_t()
-	{
-		auto *mr_rkey_pool = ep->domain->mr_rkey_pool;
-
-		if (mr_rkey_pool->get_size() != 0) {
-			mr_rkey_pool->free_id(this->mr_key);
-		}
-	}
-
-	/**
-	 * @brief	Get first MR key for GIN MR handle
-	 * 		This interface isn't necessary for GIN.
-	 */
-	int get_mr_key(uint64_t *mr_key_ptr) override { return -ENOTSUP; }
-
-	/* Array of size `num_rails' */
-	std::vector<ofi_mr_ptr> mr;
-};
 
 struct nccl_ofi_gin_ep_rail_t {
 
@@ -139,6 +111,36 @@ private:
 
 	int alloc_write_ack_buffer();
 	int close_write_ack_buffer();
+};
+
+class nccl_ofi_gin_mr_handle_t : public nccl_net_ofi_mr_handle_t
+{
+private:
+	/* Back-pointer to GIN ep */
+	nccl_ofi_gin_ep_t *ep;
+public:
+	nccl_ofi_gin_mr_handle_t(size_t num_rails, uint64_t mr_key_arg) :
+		nccl_net_ofi_mr_handle_t(mr_key_arg), mr(num_rails)
+	{
+	}
+
+	~nccl_ofi_gin_mr_handle_t()
+	{
+		auto *mr_rkey_pool = ep->domain->mr_rkey_pool;
+
+		if (mr_rkey_pool->get_size() != 0) {
+			mr_rkey_pool->free_id(this->mr_key);
+		}
+	}
+
+	/**
+	 * @brief	Get first MR key for GIN MR handle
+	 * 		This interface isn't necessary for GIN.
+	 */
+	int get_mr_key(uint64_t *mr_key_ptr) override { return -ENOTSUP; }
+
+	/* Array of size `num_rails' */
+	std::vector<ofi_mr_ptr> mr;
 };
 
 #endif

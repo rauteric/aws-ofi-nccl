@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025      Amazon.com, Inc. or its affiliates. All rights reserved.
+ */
+
+#include "config.h"
+
 #include "gin/nccl_ofi_gin_ep.h"
 #include "gin/nccl_ofi_gin_reqs.h"
 
@@ -5,7 +11,6 @@
 #include "nccl_ofi_ofiutils.h"
 #include "nccl_ofi_mr.h"
 #include "nccl_ofi_param.h"
-#include "nccl_ofi_gin_ep.h"
 #include "nccl_ofi.h"
 #include "nccl_ofi_log.h"
 
@@ -64,8 +69,8 @@ nccl_ofi_gin_ep_t::nccl_ofi_gin_ep_t(nccl_net_ofi_domain_t *domain_arg) :
 	for (uint16_t r = 0; r < this->num_rails; r++) {
 		auto& ofi_domain = ofi_domains[r];
 		rail_cq.emplace_back(create_cq(*ofi_domain));
-		rails.emplace_back(r, this, num_buffers_per_rail);
-		control_rails.emplace_back(r, this, num_buffers_per_rail);
+		rails.emplace_back(r, this, rail_cq[r], num_buffers_per_rail);
+		control_rails.emplace_back(r, this, rail_cq[r], num_buffers_per_rail);
 	}
 
 	ret = alloc_write_ack_buffer();
@@ -157,14 +162,6 @@ int nccl_ofi_gin_ep_t::gin_process_error_entry(struct fi_cq_err_entry *err_entry
 {
 	int ret = 0;
 
-	if (err_entry->err == FI_ECANCELED) {
-		/* Closing an EP with posted receives will generate
-		   cancellation events for the posted receives with some providers.
-		   These events are harmless and can be ignored. */
-		ret = -(err_entry->err);
-		return ret;
-	}
-
 	void *op_ctx = err_entry->op_context;
 	if (OFI_UNLIKELY(op_ctx == NULL)) {
 		NCCL_OFI_WARN("Invalid request context provided");
@@ -173,14 +170,13 @@ int nccl_ofi_gin_ep_t::gin_process_error_entry(struct fi_cq_err_entry *err_entry
 
 	nccl_net_ofi_context_t *ctx = container_of(op_ctx, nccl_net_ofi_context_t, ofi_ctx);
 
-	NCCL_OFI_WARN("Request completed with error. RC: %d. Error: %d (%s). Completed length: %ld",
-		      err_entry->err, err_entry->prov_errno,
-		      fi_cq_strerror(cq, err_entry->prov_errno, err_entry->err_data, NULL, 0),
-		      (long)err_entry->len);
-
-	ret = -(err_entry->err);
-
-	return ret;
+	ret = ctx->handle_error_entry(ctx, cq, err_entry, rail_id);
+	if (ret == -FI_ECANCELED) {
+		/* Non-fatal cancellation event. Ignore. */
+		return 0;
+	} else {
+		return ret;
+	}
 }
 
 int nccl_ofi_gin_ep_t::gin_process_cq_rail(uint16_t rail_id)
@@ -265,7 +261,7 @@ ofi_cq_ptr nccl_ofi_gin_ep_t::create_cq(ofi_domain_ptr &ofi_domain)
 	fi_cq_attr cq_attr = {};
 	cq_attr.format = FI_CQ_FORMAT_DATA;
 	cq_attr.size = ofi_nccl_cq_size();
-	auto cq_result = nccl_ofi_ofiutils_cq_create(ofi_domain, nullptr);
+	auto cq_result = nccl_ofi_ofiutils_cq_create(ofi_domain, &cq_attr);
 	if (OFI_UNLIKELY(cq_result.is_failure())) {
 		NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
 				cq_result.error_code, fi_strerror(-cq_result.error_code));

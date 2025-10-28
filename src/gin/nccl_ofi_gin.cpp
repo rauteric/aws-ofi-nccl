@@ -50,7 +50,7 @@ static inline void set_write_ack_buff_info(nccl_ofi_gin_ep_t *ep,
 	handle.write_ack_buff_addr = reinterpret_cast<uint64_t>(ep->get_write_ack_buffer_addr());
 	auto *mr_handle = ep->get_write_ack_buffer_mr_handle();
 
-	for (int i = 0; i < ep->num_rails; ++i) {
+	for (size_t i = 0; i < ep->num_rails; ++i) {
 		uint64_t key = fi_mr_key(mr_handle->mr[i].get());
 		assert_always(key != FI_KEY_NOTAVAIL);
 		handle.write_ack_buff_mr_key[i] = key;
@@ -220,7 +220,6 @@ static inline int writedata_ack(nccl_ofi_gin_comm *gin_comm, unsigned int peer_r
 	uint32_t peer_comm_id = rank_comm.comm_id;
 	uint32_t imm_data = GIN_IMM_GET_IMM_DATA(peer_comm_id, msg_seq_num, WRITEDATA_ACK_NSEG);
 
-	auto *domain = gin_comm->ep->domain;
 	auto *ofi_ep = gin_comm->ep->control_rails[rail_id].ofi_ep.get();
 
 	auto *desc = fi_mr_desc(gin_comm->ep->get_write_ack_buffer_mr_handle()->mr[rail_id].get());

@@ -6,6 +6,8 @@
 #define NCCL_OFI_GIN_REQS_H
 
 #include "nccl_ofi.h"
+#include "nccl_ofi_freelist.h"
+
 #include "gin/nccl_ofi_gin_types.h"
 
 /** TODO use freelist-ish thing for these... **/

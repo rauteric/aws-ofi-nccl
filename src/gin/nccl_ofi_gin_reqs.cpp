@@ -20,6 +20,19 @@ static inline int gin_handle_error_entry(nccl_net_ofi_context_t *ctx,
 					    uint16_t rail_id)
 {
 	int ret = 0;
+
+	if (err_entry->err == FI_ECANCELED) {
+		/* Closing an EP with posted receives will (erroneously) generate
+		   cancellation events for the posted receives with the EFA provider
+		   in Libfabric versions prior to 1.22. These events are harmless
+		   and can be ignored.
+
+		   With Libfabric 1.22 and later, we shouldn't get these cancel
+		   events at all. The plugin does not explicitly call fi_cancel. */
+		ret = -(err_entry->err);
+		return ret;
+	}
+
 	assert(ctx);
 	nccl_net_ofi_gin_req_t *req = cpp_container_of(ctx, &nccl_net_ofi_gin_req_t::ctx);
 
@@ -77,8 +90,6 @@ int nccl_net_ofi_gin_recv_req_t::handle_cq_entry(nccl_net_ofi_context_t *_ctx,
 
 	auto *cq_entry = reinterpret_cast<struct fi_cq_data_entry *>(cq_entry_base);
 
-	auto *domain = gin_ep->domain;
-
 	int ret = 0;
 
 	/* TODO: (refactoring) make these cases separate method functions
@@ -119,8 +130,8 @@ int nccl_net_ofi_gin_recv_req_t::handle_cq_entry(nccl_net_ofi_context_t *_ctx,
 
 int nccl_net_ofi_gin_recv_req_t::post()
 {
-	nccl_ofi_gin_mr_handle_t *mr_handle = static_cast< *>
-		(rx_buff_elem->mr_handle)->mr_handle;
+	auto *mr_handle = static_cast<nccl_ofi_gin_mr_handle_t *>
+		(rx_buff_elem->mr_handle);
 	struct fid_ep *ofi_ep = rail->ofi_ep.get();
 	size_t size = sizeof(nccl_net_ofi_gin_signal_metadata_msg_t);
 	void *desc = fi_mr_desc(mr_handle->mr[rail->rail_id].get());

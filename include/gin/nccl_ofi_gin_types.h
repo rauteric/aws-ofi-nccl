@@ -19,6 +19,8 @@ struct nccl_net_ofi_gin_iputsignal_recv_req;
 struct nccl_ofi_gin_ep_t;
 struct nccl_ofi_gin_ep_rail_t;
 
+class nccl_ofi_gin_mr_handle_t;
+
 struct nccl_net_ofi_gin_signal_metadata_msg_t {
 	/* Message sequence number */
 	uint32_t msg_seq_num;

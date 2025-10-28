@@ -126,11 +126,9 @@ public:
 		return domain;
 	}
 
-	inline std::vector<ofi_domain_ptr &> get_ofi_domains() override
+	inline std::vector<ofi_domain_ptr *> get_ofi_domains() override
 	{
-		std::vector<ofi_domain_ptr &> ret_domains;
-		ret_domains.push_back(domain);
-		return ret_domains;
+		return {&domain};
 	}
 
 	inline ofi_cq_ptr &get_ofi_cq_for_cm() override
@@ -316,6 +314,11 @@ public:
 	inline struct fi_info *get_ofi_info_for_cm() override
 	{
 		return info;
+	}
+
+	inline std::vector<struct fi_info *>get_ofi_infos() override
+	{
+		return {info};
 	}
 
 	inline nccl_net_ofi_sendrecv_plugin_t *sendrecv_device_get_plugin()

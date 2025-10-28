@@ -79,7 +79,7 @@ struct gin_sym_mr_handle
 	size_t size;
 
 	/* Handle to local memory registration */
-	void *local_comm_handle;
+	nccl_ofi_gin_mr_handle_t *local_handle;
 	/* Type of registration (NCCL_PTR_HOST, NCCL_PTR_CUDA) */
 	int type;
 	/* GDRCopy handle */
@@ -206,8 +206,8 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 
 int nccl_ofi_gin_allgather(struct nccl_ofi_gin_comm *comm, void *data, size_t size);
 
-int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int type, uint64_t offset,
-		       int fd, uint64_t mrFlags, gin_sym_mr_handle** mr_handle_out);
+int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, nccl_ofi_mr_ckey_ref ckey, int type,
+		       uint64_t mrFlags, gin_sym_mr_handle** mr_handle_out);
 
 int gin_deregMrSym(nccl_ofi_gin_comm* comm, gin_sym_mr_handle* mr_handle);
 

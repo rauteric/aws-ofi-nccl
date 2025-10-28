@@ -464,38 +464,33 @@ int gin_handle_signal_metadata_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t
 	return ret;
 }
 
-int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int type, uint64_t offset,
-		       int fd, uint64_t mrFlags, gin_sym_mr_handle** mr_handle_out)
+int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, nccl_ofi_mr_ckey_ref ckey, int type,
+		       uint64_t mrFlags, gin_sym_mr_handle** mr_handle_out)
 {
 	auto *gin_ep = comm->ep;
-	void *local_handle = nullptr;
-
-	/* Register buffer with local send comm */
-	/* This should really be registered with the domain, not the send comm,
-	   but the API function used here is doing some extra legwork to create
-	   ckey, etc., that I'm not sure I want to replicate here. */
-	ncclResult_t ret = nccl_net_ofi_regMrDmaBuf_v6(comm->s_comm, data, size, type, offset, fd,
-						       &local_handle);
-	if (ret != ncclSuccess) {
-		return -EIO;
-	}
 
 	auto *mr_handle = new gin_sym_mr_handle{};
-	mr_handle->addr = data;
-	mr_handle->size = size;
-	mr_handle->local_comm_handle = local_handle;
+
+	/* Register buffer with local endpoint */
+	int ret = gin_ep->reg_mr(ckey, type, &mr_handle->local_handle);
+	if (ret != 0) {
+		return ret;
+	}
+
+	mr_handle->addr = reinterpret_cast<void *>(nccl_ofi_mr_ckey_baseaddr(ckey));
+	mr_handle->size = nccl_ofi_mr_ckey_len(ckey);
 	mr_handle->remote_mr.resize(comm->nranks, {});
 	mr_handle->type = type;
 	gin_remote_mr &my_remote_mr = mr_handle->remote_mr[comm->rank];
 
-	my_remote_mr.address = reinterpret_cast<uintptr_t>(data);
+	my_remote_mr.address = reinterpret_cast<uintptr_t>(mr_handle->addr);
 	my_remote_mr.num_rails = gin_ep->num_rails;
 
 	if (type == NCCL_PTR_CUDA) {
 		assert(comm->gdr_handle != nullptr);
-		uintptr_t data_uint = reinterpret_cast<uintptr_t>(data);
+		uintptr_t data_uint = reinterpret_cast<uintptr_t>(mr_handle->addr);
 		uintptr_t regbgn = NCCL_OFI_ROUND_DOWN(data_uint, GPU_PAGE_SIZE);
-		uintptr_t regend = data_uint + size;
+		uintptr_t regend = data_uint + mr_handle->size;
 		mr_handle->gdr_reglen = NCCL_OFI_ROUND_UP(regend - regbgn, GPU_PAGE_SIZE);
 
 		int iret = gdr_pin_buffer(comm->gdr_handle, regbgn, mr_handle->gdr_reglen, 0, 0,
@@ -517,27 +512,27 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, void* data, size_t size, int typ
 				      (data_uint - regbgn);
 	}
 
-	auto *rdma_mr_handle = static_cast<nccl_net_ofi_rdma_mr_handle_t *>(local_handle);
+	auto *local_handle = mr_handle->local_handle;
 	for (unsigned i = 0; i < gin_ep->num_rails; ++i) {
-		my_remote_mr.mr_key[i] = fi_mr_key(rdma_mr_handle->mr[i].get());
+		my_remote_mr.mr_key[i] = fi_mr_key(local_handle->mr[i].get());
 		if (my_remote_mr.mr_key[i] == FI_KEY_NOTAVAIL) {
 			delete mr_handle;
 			return -EIO;
 		}
 	}
 
-	auto insert_res = comm->mr_handle_map.insert(std::make_pair(data, mr_handle));
+	auto insert_res = comm->mr_handle_map.insert(std::make_pair(mr_handle->addr, mr_handle));
 	if (!insert_res.second) {
 		delete mr_handle;
 		return -EEXIST;
 	}
 
-	int iret = nccl_ofi_gin_allgather(comm, mr_handle->remote_mr.data(),
+	ret = nccl_ofi_gin_allgather(comm, mr_handle->remote_mr.data(),
 					  sizeof(gin_remote_mr));
-	if (iret != 0) {
-		comm->mr_handle_map.erase(data);
+	if (ret != 0) {
+		comm->mr_handle_map.erase(mr_handle->addr);
 		delete mr_handle;
-		return iret;
+		return ret;
 	}
 
 	*mr_handle_out = mr_handle;
@@ -562,15 +557,13 @@ int gin_deregMrSym(nccl_ofi_gin_comm* comm, gin_sym_mr_handle* mr_handle)
 		mr_handle->gdr_mr_handle = {};
 	}
 
-	ncclResult_t ret = nccl_net_ofi_deregMr_v2(comm->s_comm, mr_handle->local_comm_handle);
-	if (ret != ncclSuccess) {
-		return -EIO;
-	}
-
 	size_t n = comm->mr_handle_map.erase(mr_handle->addr);
 	if (n != 1) {
 		return -ENOENT;
 	}
+
+	delete mr_handle->local_handle;
+	mr_handle->local_handle = nullptr;
 
 	delete mr_handle;
 	return 0;
@@ -683,7 +676,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 		write_req = new nccl_net_ofi_gin_tx_req_t();
 
 		void *src = reinterpret_cast<void *>(srcMhandle->remote_mr[gin_comm->rank].address + srcOff);
-		auto *src_mhandle = static_cast<nccl_ofi_gin_mr_handle_t *>(srcMhandle->local_comm_handle);
+		auto *src_mhandle = srcMhandle->local_handle;
 		void *desc = fi_mr_desc(src_mhandle->mr[rail_id].get());
 
 		auto &dest_remote_mr = dstMhandle->remote_mr[rank];

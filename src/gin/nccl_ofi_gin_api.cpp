@@ -141,7 +141,19 @@ static ncclResult_t nccl_ofi_gin_regMrSymDmaBuf(void* collComm, void* data, size
 	auto *comm = static_cast<nccl_ofi_gin_comm *>(collComm);
 	gin_sym_mr_handle *mr_handle = nullptr;
 
-	int ret = gin_regMrSymDmaBuf(comm, data, size, type, offset, fd, mrFlags, &mr_handle);
+#if HAVE_DECL_FI_MR_DMABUF
+	const nccl_ofi_mr_ckey_t cache_key = (fd == -1)
+		? nccl_ofi_mr_ckey_mk_vec(data, size)
+		: nccl_ofi_mr_ckey_mk_dmabuf(fd, offset, size, data);
+#else
+	if (fd != -1) {
+		NCCL_OFI_WARN("Passed fd handle, but not compiled with DMA-BUF support.");
+		return nccl_net_ofi_retval_translate(-EINVAL);
+	}
+	const nccl_ofi_mr_ckey_t cache_key = nccl_ofi_mr_ckey_mk_vec(data, size);
+#endif
+
+	int ret = gin_regMrSymDmaBuf(comm, &cache_key, type, mrFlags, &mr_handle);
 	if (ret != 0) {
 		return nccl_net_ofi_retval_translate(ret);
 	}

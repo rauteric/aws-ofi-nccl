@@ -15,6 +15,8 @@
 #include <pthread.h>
 #include <stdlib.h>
 
+#include <rdma/fi_endpoint.h>
+
 #include "nccl_ofi.h"
 #include "nccl_ofi_log.h"
 #if HAVE_CUDA

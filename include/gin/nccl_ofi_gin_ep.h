@@ -7,6 +7,7 @@
 
 #include "rdma/fabric.h"
 #include <vector>
+#include <unordered_map>
 
 #include "nccl_ofi_freelist.h"
 #include "gin/nccl_ofi_gin_types.h"
@@ -42,13 +43,11 @@ public:
 struct nccl_ofi_gin_ep_rail_t {
 
 	nccl_ofi_gin_ep_rail_t(uint16_t rail_id_, nccl_ofi_gin_ep_t *gin_ep,
-			       size_t num_rx_buffers);
+			       ofi_cq_ptr &cq, size_t num_rx_buffers);
 
 	/* No explicit destructor needed -- resources should clean themselves up */
 
 	const uint16_t rail_id;
-
-	ofi_cq_ptr cq;
 
 	/* Address vector handle */
 	ofi_av_ptr av;
@@ -77,20 +76,42 @@ struct nccl_ofi_gin_ep_t {
 
 	int reg_mr(nccl_ofi_mr_ckey_ref ckey, int type, nccl_ofi_gin_mr_handle_t **mhandle);
 
-	int dereg_mr(nccl_ofi_gin_mr_handle_t *handle_ptr);
+	void dereg_mr(nccl_ofi_gin_mr_handle_t *handle_ptr);
 
 	nccl_ofi_gin_comm& get_comm(uint32_t comm_id) {
-		assert(comm_id < gin_comms.size());
-		return gin_comms[comm_id];
+		auto it = gin_comms.find(comm_id);
+		if (it == gin_comms.end()) {
+			NCCL_OFI_WARN("Invalid comm_id %d", comm_id);
+			throw std::runtime_error("Failed to find comm_id");
+		}
+
+		return *(it->second);
 	}
 
-	void set_comm(uint32_t comm_id, const nccl_ofi_gin_comm& comm) {
-		assert(comm_id < gin_comms.size());
-		gin_comms[comm_id] = comm;
+	void set_comm(uint32_t comm_id, nccl_ofi_gin_comm& comm) {
+		auto it = gin_comms.insert({comm_id, &comm});
+		if (!it.second) {
+			NCCL_OFI_WARN("Failed to insert duplicate comm_id %d", comm_id);
+			throw std::runtime_error("Failed to insert comm_id");
+		}
 	}
 
 	void *get_write_ack_buffer_addr() { return write_ack_buffer.addr; }
 	nccl_ofi_gin_mr_handle_t *get_write_ack_buffer_mr_handle() { return write_ack_buffer.mr_handle; }
+
+	int process_cq();
+
+private:
+	int gin_process_completions(struct fi_cq_data_entry *cq_entry,
+				    fi_addr_t *src_addrs,
+				    uint64_t num_cqes,
+				    uint16_t rail_id);
+
+	int gin_process_error_entry(struct fi_cq_err_entry *err_entry,
+				    struct fid_cq *cq,
+				    uint16_t rail_id);
+
+	int gin_process_cq_rail(uint16_t rail_id);
 
 private:
 	struct {
@@ -98,7 +119,11 @@ private:
 		nccl_ofi_gin_mr_handle_t *mr_handle = nullptr;
 	} write_ack_buffer;
 
-	std::vector<nccl_ofi_gin_comm&> gin_comms;
+	std::unordered_map<uint32_t, nccl_ofi_gin_comm*> gin_comms;
+
+	static ofi_cq_ptr create_cq(ofi_domain_ptr &ofi_domain);
+
+	std::vector<ofi_cq_ptr> rail_cq;
 
 	int alloc_write_ack_buffer();
 	int close_write_ack_buffer();

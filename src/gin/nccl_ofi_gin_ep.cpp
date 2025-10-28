@@ -6,6 +6,8 @@
 #include "nccl_ofi_mr.h"
 #include "nccl_ofi_param.h"
 #include "nccl_ofi_gin_ep.h"
+#include "nccl_ofi.h"
+#include "nccl_ofi_log.h"
 
 nccl_ofi_gin_ep_t::nccl_ofi_gin_ep_t(nccl_net_ofi_domain_t *domain_arg) :
 	domain(domain_arg),
@@ -14,6 +16,7 @@ nccl_ofi_gin_ep_t::nccl_ofi_gin_ep_t(nccl_net_ofi_domain_t *domain_arg) :
 	auto ofi_domains = domain->get_ofi_domains();
 	this->num_rails = ofi_domains.size();
 
+	rail_cq.reserve(this->num_rails);
 	rails.reserve(this->num_rails);
 	control_rails.reserve(this->num_rails);
 
@@ -34,6 +37,8 @@ nccl_ofi_gin_ep_t::nccl_ofi_gin_ep_t(nccl_net_ofi_domain_t *domain_arg) :
 
 	// Create rails
 	for (uint16_t r = 0; r < this->num_rails; r++) {
+		auto& ofi_domain = ofi_domains[r];
+		rail_cq.emplace_back(create_cq(*ofi_domain));
 		rails.emplace_back(r, this, num_buffers_per_rail);
 		control_rails.emplace_back(r, this, num_buffers_per_rail);
 	}
@@ -91,6 +96,159 @@ static int set_mr_req_attr(uint64_t mr_key,
 	return ret;
 }
 
+int nccl_ofi_gin_ep_t::gin_process_completions(struct fi_cq_data_entry *cq_entry,
+					       fi_addr_t *src_addrs,
+					       uint64_t num_cqes,
+					       uint16_t rail_id)
+{
+	int ret = 0;
+
+	for (uint64_t comp_idx = 0; comp_idx < num_cqes; comp_idx++) {
+		void *op_ctx = cq_entry[comp_idx].op_context;
+
+		if (OFI_UNLIKELY(op_ctx == NULL)) {
+			NCCL_OFI_WARN("Invalid request context provided");
+			return -EINVAL;
+		}
+
+		nccl_net_ofi_context_t *ctx = container_of(op_ctx,
+							   nccl_net_ofi_context_t,
+							   ofi_ctx);
+
+		ret = ctx->handle_cq_entry(ctx, reinterpret_cast<struct fi_cq_entry *>(&cq_entry[comp_idx]),
+					   src_addrs[comp_idx], rail_id);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Context progress failed: %d", ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+int nccl_ofi_gin_ep_t::gin_process_error_entry(struct fi_cq_err_entry *err_entry,
+					       struct fid_cq *cq,
+					       uint16_t rail_id)
+{
+	int ret = 0;
+
+	if (err_entry->err == FI_ECANCELED) {
+		/* Closing an EP with posted receives will generate
+		   cancellation events for the posted receives with some providers.
+		   These events are harmless and can be ignored. */
+		ret = -(err_entry->err);
+		return ret;
+	}
+
+	void *op_ctx = err_entry->op_context;
+	if (OFI_UNLIKELY(op_ctx == NULL)) {
+		NCCL_OFI_WARN("Invalid request context provided");
+		return -EINVAL;
+	}
+
+	nccl_net_ofi_context_t *ctx = container_of(op_ctx, nccl_net_ofi_context_t, ofi_ctx);
+
+	NCCL_OFI_WARN("Request completed with error. RC: %d. Error: %d (%s). Completed length: %ld",
+		      err_entry->err, err_entry->prov_errno,
+		      fi_cq_strerror(cq, err_entry->prov_errno, err_entry->err_data, NULL, 0),
+		      (long)err_entry->len);
+
+	ret = -(err_entry->err);
+
+	return ret;
+}
+
+int nccl_ofi_gin_ep_t::gin_process_cq_rail(uint16_t rail_id)
+{
+	struct fi_cq_data_entry cqe_buffers[cq_read_count];
+	fi_addr_t src_addrs[cq_read_count];
+	ssize_t rc = 0;
+	int ret = 0;
+
+	if (rail_id >= rail_cq.size()) {
+		NCCL_OFI_WARN("Invalid rail_id %u, max is %zu", rail_id, rail_cq.size());
+		return -EINVAL;
+	}
+
+	while (true) {
+		/* Receive completions for the given rail */
+		rc = fi_cq_readfrom(rail_cq[rail_id].get(), cqe_buffers, cq_read_count, src_addrs);
+		if (rc > 0) {
+			ret = gin_process_completions(cqe_buffers, src_addrs, rc, rail_id);
+			if (OFI_UNLIKELY(ret != 0))
+				goto exit;
+		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
+			/*
+			 * On call to fi_cq_readerr, Libfabric requires some members of
+			 * err_entry to be zero-initialized or point to valid data.  For
+			 * simplicity, just zero out the whole struct.
+			 */
+			struct fi_cq_err_entry err_entry = { };
+
+			ret = fi_cq_readerr(rail_cq[rail_id].get(), &err_entry, 0);
+			if (OFI_UNLIKELY(ret == -FI_EAGAIN)) {
+				/*
+				 * Error not available yet.
+				 * fi_cq_read will keep returning -FI_EAVAIL so just bail out and try again later.
+				 */
+				ret = 0;
+				break;
+			} else if (OFI_UNLIKELY(ret < 0)) {
+				NCCL_OFI_WARN("Unable to read from fi_cq_readerr. RC: %d. Error: %s",
+					      ret, fi_strerror(-ret));
+				goto exit;
+			}
+
+			ret = gin_process_error_entry(&err_entry, rail_cq[rail_id].get(), rail_id);
+			if (ret != 0) {
+				goto exit;
+			}
+		} else if (rc == -FI_EAGAIN) {
+			/* No completions to process */
+			break;
+		} else {
+			NCCL_OFI_WARN("Unable to retrieve completion queue entries. RC: %zd, ERROR: %s",
+				      rc, fi_strerror(-rc));
+			ret = -EINVAL;
+			goto exit;
+		}
+	}
+
+exit:
+	return ret;
+}
+
+int nccl_ofi_gin_ep_t::process_cq()
+{
+	int ret = 0;
+
+	/* Process completion queues for all rails */
+	for (uint16_t rail_id = 0; rail_id < rail_cq.size(); ++rail_id) {
+		ret = gin_process_cq_rail(rail_id);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to process CQ for rail %u: %d", rail_id, ret);
+			return ret;
+		}
+	}
+
+	return ret;
+}
+
+ofi_cq_ptr nccl_ofi_gin_ep_t::create_cq(ofi_domain_ptr &ofi_domain)
+{
+	/* Create cq */
+	fi_cq_attr cq_attr = {};
+	cq_attr.format = FI_CQ_FORMAT_DATA;
+	cq_attr.size = ofi_nccl_cq_size();
+	auto cq_result = nccl_ofi_ofiutils_cq_create(ofi_domain, nullptr);
+	if (OFI_UNLIKELY(cq_result.is_failure())) {
+		NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
+				cq_result.error_code, fi_strerror(-cq_result.error_code));
+		throw std::runtime_error("GIN: ofi cq creation failed");
+	}
+
+	return std::move(cq_result.resource);
+}
 
 int nccl_ofi_gin_ep_t::reg_mr(nccl_ofi_mr_ckey_ref ckey, int type, nccl_ofi_gin_mr_handle_t **mhandle)
 {
@@ -123,7 +281,7 @@ int nccl_ofi_gin_ep_t::reg_mr(nccl_ofi_mr_ckey_ref ckey, int type, nccl_ofi_gin_
 
 	/* Register memory on each rail */
 	for (uint16_t rail_id = 0; rail_id != num_rails; ++rail_id) {
-		auto mr_result = nccl_ofi_ofiutils_mr_regattr(ofi_domains[rail_id],
+		auto mr_result = nccl_ofi_ofiutils_mr_regattr(*(ofi_domains[rail_id]),
 							      &mr_attr,
 							      regattr_flags);
 		if (OFI_UNLIKELY(mr_result.is_failure())) {
@@ -135,10 +293,11 @@ int nccl_ofi_gin_ep_t::reg_mr(nccl_ofi_mr_ckey_ref ckey, int type, nccl_ofi_gin_
 	}
 
 	*mhandle = ret_handle.release();
+	return 0;
 }
 
 
-int nccl_ofi_gin_ep_t::dereg_mr(nccl_ofi_gin_mr_handle_t *handle_ptr)
+void nccl_ofi_gin_ep_t::dereg_mr(nccl_ofi_gin_mr_handle_t *handle_ptr)
 {
 	if (OFI_UNLIKELY(handle_ptr == NULL)) {
 		return;
@@ -170,6 +329,28 @@ int nccl_ofi_gin_ep_t::alloc_write_ack_buffer()
 		close_write_ack_buffer();
 		return ret;
 	}
+
+	return 0;
+}
+
+int nccl_ofi_gin_ep_t::close_write_ack_buffer()
+{
+	int ret = 0;
+
+	if (write_ack_buffer.mr_handle != nullptr) {
+		dereg_mr(write_ack_buffer.mr_handle);
+		write_ack_buffer.mr_handle = nullptr;
+	}
+
+	if (write_ack_buffer.addr) {
+		ret = nccl_net_ofi_dealloc_mr_buffer(write_ack_buffer.addr, system_page_size);
+		if (ret != 0) {
+			NCCL_OFI_WARN("Failed to deallocate write ack buffer; RC: %d", ret);
+		}
+		write_ack_buffer.addr = nullptr;
+	}
+
+	return ret;
 }
 
 static inline struct fi_info *get_rx_cq_info(struct fi_info *info)
@@ -199,27 +380,15 @@ static inline struct fi_info *get_rx_cq_info(struct fi_info *info)
 
 
 nccl_ofi_gin_ep_rail_t::nccl_ofi_gin_ep_rail_t(uint16_t rail_id_, nccl_ofi_gin_ep_t *gin_ep,
-					       size_t num_rx_buffers)
+					       ofi_cq_ptr &cq, size_t num_rx_buffers)
 					       : rail_id(rail_id_)
 					         
 {
 	auto *domain = gin_ep->domain;
-	auto &ofi_domain = domain->get_ofi_domains()[rail_id];
-
-	/* Create cq */
-	fi_cq_attr cq_attr = {};
-	cq_attr.format = FI_CQ_FORMAT_DATA;
-	cq_attr.size = ofi_nccl_cq_size();
-	auto cq_result = nccl_ofi_ofiutils_cq_create(ofi_domain, nullptr);
-	if (OFI_UNLIKELY(cq_result.is_failure())) {
-		NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
-				cq_result.error_code, fi_strerror(-cq_result.error_code));
-		throw std::runtime_error("GIN: ofi cq creation failed");
-	}
-	this->cq = std::move(cq_result.resource);
+	auto ofi_domain = domain->get_ofi_domains()[rail_id];
 
 	/* Create an av */
-	auto av_result = nccl_ofi_ofiutils_av_create(ofi_domain);
+	auto av_result = nccl_ofi_ofiutils_av_create(*ofi_domain);
 	if (av_result.is_failure()) {
 		throw std::runtime_error("Failed to create av");
 	}
@@ -230,7 +399,7 @@ nccl_ofi_gin_ep_rail_t::nccl_ofi_gin_ep_rail_t(uint16_t rail_id_, nccl_ofi_gin_e
 	ofi_info_ptr rx_cq_info(get_rx_cq_info(info));
 
 	/* Create ep */
-	auto ep_result = nccl_ofi_ofiutils_ep_create(rx_cq_info.get(), ofi_domain, av, cq);
+	auto ep_result = nccl_ofi_ofiutils_ep_create(rx_cq_info.get(), *ofi_domain, av, cq);
 	if (ep_result.is_failure()) {
 		throw std::runtime_error("Failed to create ep");
 	}

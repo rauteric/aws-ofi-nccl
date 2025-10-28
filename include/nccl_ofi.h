@@ -478,7 +478,7 @@ public:
 	 * There may be more than one fid_domain per domain, depending on the
 	 * transport.
 	 */
-	virtual std::vector<ofi_domain_ptr &> get_ofi_domains() = 0;
+	virtual std::vector<ofi_domain_ptr *> get_ofi_domains() = 0;
 
 	/**
 	 * Retrieve an fid_cq object associated with this domain to be used for 

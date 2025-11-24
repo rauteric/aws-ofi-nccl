@@ -17,7 +17,8 @@
 int gin_freelist_regmr_fn(void *ep_ptr, void *data, size_t size, void **mhandle)
 {
 	auto ep = static_cast<nccl_ofi_gin_ep_t *>(ep_ptr);
-	auto ckey = nccl_ofi_mr_ckey_mk_vec(data, size);
+	/* Setting ep to nullptr for the cache key -- we don't use the MR cache for GIN */
+	auto ckey = nccl_ofi_mr_ckey_mk_vec(data, size, nullptr);
 	nccl_ofi_gin_mr_handle_t *mr_handle = nullptr;
 	int ret = ep->reg_mr(&ckey, NCCL_PTR_HOST, &mr_handle);
 	if (ret != 0) {
@@ -79,7 +80,7 @@ static int set_mr_req_attr(uint64_t mr_key,
 		mr_attr->iface = FI_HMEM_CUDA;
 
 		/* Get CUDA device ID */
-		ret = nccl_net_ofi_get_cuda_device_for_addr(
+		ret = nccl_net_ofi_get_gpu_device_for_addr(
 			(void*)nccl_ofi_mr_ckey_baseaddr(ckey),
 			&mr_attr->device.cuda);
 		if (OFI_UNLIKELY(ret != 0)) {
@@ -383,7 +384,7 @@ nccl_ofi_gin_write_ack_buffer::nccl_ofi_gin_write_ack_buffer(nccl_ofi_gin_ep_t &
 		throw std::runtime_error("Failed to allocate write ack buffer");
 	}
 
-	auto ckey = nccl_ofi_mr_ckey_mk_vec(this->addr, system_page_size);
+	auto ckey = nccl_ofi_mr_ckey_mk_vec(this->addr, system_page_size, nullptr);
 
 	ret = ep.reg_mr(&ckey, NCCL_PTR_HOST, &mr_handle);
 	if (ret != 0) {

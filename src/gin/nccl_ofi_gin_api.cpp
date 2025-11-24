@@ -90,6 +90,7 @@ static ncclResult_t nccl_ofi_gin_getProperties(int dev, ncclNetProperties_v11_t*
 
 static ncclResult_t nccl_ofi_gin_listen(void* ctx, int dev, void* handle, void** listenComm)
 {
+	auto plugin = nccl_net_ofi_get_plugin();
 	if (plugin == nullptr) {
 		NCCL_OFI_WARN("Error accessing plugin: plugin has not been initialized.");
 		return ncclInternalError;
@@ -149,8 +150,8 @@ static ncclResult_t nccl_ofi_gin_regMrSymDmaBuf(void* collComm, void* data, size
 
 #if HAVE_DECL_FI_MR_DMABUF
 	const nccl_ofi_mr_ckey_t cache_key = (fd == -1)
-		? nccl_ofi_mr_ckey_mk_vec(data, size)
-		: nccl_ofi_mr_ckey_mk_dmabuf(fd, offset, size, data);
+		? nccl_ofi_mr_ckey_mk_vec(data, size, nullptr)
+		: nccl_ofi_mr_ckey_mk_dmabuf(fd, offset, size, data, nullptr);
 #else
 	if (fd != -1) {
 		NCCL_OFI_WARN("Passed fd handle, but not compiled with DMA-BUF support.");

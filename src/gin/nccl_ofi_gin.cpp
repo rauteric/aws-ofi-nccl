@@ -128,7 +128,7 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 
 	std::unique_ptr<nccl_ofi_gin_comm_t> gin_comm = std::make_unique<nccl_ofi_gin_comm_t>
 		(domain, domain.get_device()->dev_id, rank, nranks,
-		 s_comm, r_comm, gin_ctx->gdrcopy_ctx.get());
+		 s_comm, r_comm, *gin_ctx->copy_ctx);
 
 	std::vector<gin_connect_handle> all_handles(nranks, gin_connect_handle{ });
 	gin_connect_handle &my_gin_handle = all_handles[rank];
@@ -237,26 +237,25 @@ static inline int do_gin_signal(nccl_ofi_gin_comm *gin_comm,
 	gin_sym_mr_handle *mr_handle = it->second;
 
 	if (mr_handle->type == NCCL_PTR_CUDA) {
-		auto *d_ptr = reinterpret_cast<uint64_t*>(
-			static_cast<uint8_t *>(mr_handle->host_map) + metadata.signal_offset);
-
 		uint64_t old_value;
-		int ret = gin_comm->gdr_ctx->copy_from_mapping(mr_handle->gdr_mr_handle, &old_value,
-						d_ptr, sizeof(old_value));
+
+		int ret = gin_comm->copy_ctx.copy_from_device
+			(*mr_handle->gdr_handle, metadata.signal_offset,
+			 &old_value, sizeof(old_value));
 		if (ret != 0) {
-			/* Plugin convention is negative errno */
-			return -ret;
+			return ret;
 		}
 
 		/* We only support addition */
 		uint64_t new_value = old_value + add_value;
 
 		/* Write using GDRcopy. */
-		ret = gin_comm->gdr_ctx->copy_to_mapping(mr_handle->gdr_mr_handle, d_ptr,
-					  &new_value, sizeof(new_value));
+		ret = gin_comm->copy_ctx.copy_to_device(&new_value, *mr_handle->gdr_handle,
+			metadata.signal_offset, sizeof(new_value));
 		if (ret != 0) {
 			return -ret;
 		}
+
 	} else {
 		/**
 		 * Notes:
@@ -456,39 +455,23 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, nccl_ofi_mr_ckey_ref ckey, void 
 		return ret;
 	}
 
-	mr_handle->addr = data_ptr;
+	mr_handle->input_address = data_ptr;
 	mr_handle->size = size;
 	mr_handle->remote_mr.resize(comm->nranks, {});
 	mr_handle->type = type;
 	gin_remote_mr &my_remote_mr = mr_handle->remote_mr[comm->rank];
 
-	my_remote_mr.address = reinterpret_cast<uintptr_t>(mr_handle->addr);
+	my_remote_mr.address = reinterpret_cast<uintptr_t>(mr_handle->input_address);
 	my_remote_mr.num_rails = gin_ep.num_rails;
 
 	if (type == NCCL_PTR_CUDA) {
-		assert(comm->gdr_ctx != nullptr);
-		uintptr_t data_uint = reinterpret_cast<uintptr_t>(mr_handle->addr);
-		uintptr_t regbgn = NCCL_OFI_ROUND_DOWN(data_uint, NCCL_OFI_GPU_PAGE_SIZE);
-		uintptr_t regend = data_uint + mr_handle->size;
-		mr_handle->gdr_reglen = NCCL_OFI_ROUND_UP(regend - regbgn, NCCL_OFI_GPU_PAGE_SIZE);
-
-		int iret = comm->gdr_ctx->pin_buffer(regbgn, mr_handle->gdr_reglen, 0, 0,
-					  &mr_handle->gdr_mr_handle);
-		if (iret != 0) {
+		ret = comm->copy_ctx.register_region(mr_handle->input_address, mr_handle->size,
+						     mr_handle->gdr_handle);
+		if (ret != 0) {
+			NCCL_OFI_WARN("GDRCopy registration failed: %d", ret);
 			delete mr_handle;
-			return -EIO;
+			return ret;
 		}
-
-		iret = comm->gdr_ctx->map(mr_handle->gdr_mr_handle, &mr_handle->gdr_mapped_ptr,
-			       mr_handle->gdr_reglen);
-		if (iret != 0) {
-			comm->gdr_ctx->unpin_buffer(mr_handle->gdr_mr_handle);
-			delete mr_handle;
-			return -EIO;
-		}
-
-		mr_handle->host_map = static_cast<uint8_t *>(mr_handle->gdr_mapped_ptr) +
-				      (data_uint - regbgn);
 	}
 
 	auto *local_handle = mr_handle->local_handle;
@@ -500,7 +483,7 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, nccl_ofi_mr_ckey_ref ckey, void 
 		}
 	}
 
-	auto insert_res = comm->mr_handle_map.insert(std::make_pair(mr_handle->addr, mr_handle));
+	auto insert_res = comm->mr_handle_map.insert(std::make_pair(mr_handle->input_address, mr_handle));
 	if (!insert_res.second) {
 		delete mr_handle;
 		return -EEXIST;
@@ -509,7 +492,7 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, nccl_ofi_mr_ckey_ref ckey, void 
 	ret = nccl_ofi_gin_allgather(comm, mr_handle->remote_mr.data(),
 					  sizeof(gin_remote_mr));
 	if (ret != 0) {
-		comm->mr_handle_map.erase(mr_handle->addr);
+		comm->mr_handle_map.erase(mr_handle->input_address);
 		delete mr_handle;
 		return ret;
 	}
@@ -521,22 +504,15 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, nccl_ofi_mr_ckey_ref ckey, void 
 int gin_deregMrSym(nccl_ofi_gin_comm* comm, gin_sym_mr_handle* mr_handle)
 {
 	if (mr_handle->type == NCCL_PTR_CUDA) {
-		int iret = comm->gdr_ctx->unmap(mr_handle->gdr_mr_handle, mr_handle->gdr_mapped_ptr,
-				     mr_handle->gdr_reglen);
-		if (iret != 0) {
-			/* TODO: here (and other error paths) we should probably continue
-			   with other cleanup. */
-			return -EIO;
+		int ret = comm->copy_ctx.deregister_region(mr_handle->gdr_handle);
+		if (ret != 0) {
+			NCCL_OFI_WARN("GDRCopy deregister failed: %d", ret);
+			return ret;
 		}
-
-		iret = comm->gdr_ctx->unpin_buffer(mr_handle->gdr_mr_handle);
-		if (iret != 0) {
-			return -EIO;
-		}
-		mr_handle->gdr_mr_handle = {};
+		mr_handle->gdr_handle = nullptr;
 	}
 
-	size_t n = comm->mr_handle_map.erase(mr_handle->addr);
+	size_t n = comm->mr_handle_map.erase(mr_handle->input_address);
 	if (n != 1) {
 		return -ENOENT;
 	}
@@ -756,7 +732,7 @@ int nccl_ofi_gin_comm::retry_pending_reqs()
 nccl_ofi_gin_comm::nccl_ofi_gin_comm(nccl_net_ofi_domain_t &domain_arg, int dev_id_, int rank_, int nranks_,
 				     nccl_net_ofi_send_comm_t *s_comm_,
 				     nccl_net_ofi_recv_comm_t *r_comm_,
-				     nccl_ofi_gdrcopy_ctx *gdr_ctx_)
+				     nccl_ofi_device_copy &copy_ctx_)
 				     :
 		resources(domain_arg),
 		rank(rank_),
@@ -766,7 +742,7 @@ nccl_ofi_gin_comm::nccl_ofi_gin_comm(nccl_net_ofi_domain_t &domain_arg, int dev_
 		outstanding_ack_counter(0),
 		metadata_fl(nullptr, &freelist_deleter),
 		next_rail_id(0),
-		gdr_ctx(gdr_ctx_)
+		copy_ctx(copy_ctx_)
 {
 	nccl_ofi_freelist_t *metadata_fl_ptr = nullptr;
 	int ret = nccl_ofi_freelist_init_mr
@@ -805,7 +781,7 @@ nccl_ofi_gin_comm::~nccl_ofi_gin_comm()
 int nccl_ofi_gin_comm::progress()
 {
 	int ret = resources.get_ep().process_cq();
-	if (ret != 0) {
+	if (OFI_UNLIKELY(ret != 0)) {
 		return ret;
 	}
 
@@ -821,7 +797,7 @@ int nccl_ofi_gin_comm::await_pending_requests()
 
 	while (outstanding_ack_counter > 0) {
 		ret = progress();
-		if (ret != 0) {
+		if (OFI_UNLIKELY(ret != 0)) {
 			return ret;
 		}
 	}

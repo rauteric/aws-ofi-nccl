@@ -10,6 +10,7 @@
 #include "nccl_ofi.h"
 #include "nccl_ofi_rdma.h"
 #include "nccl_ofi_freelist.h"
+#include "nccl_ofi_gdrcopy.h"
 
 #include "gin/nccl_ofi_gin_types.h"
 #include "gin/nccl_ofi_gin_resources.h"
@@ -82,8 +83,9 @@ struct gin_remote_mr
 
 struct gin_sym_mr_handle
 {
-	/* Local address of memory registration */
-	void *addr;
+	/* Address provided by NCCL to regMrSym. This is the base for the offset
+	   provided by NCCL */
+	void *input_address;
 	size_t size;
 
 	/* Handle to local memory registration */
@@ -91,12 +93,7 @@ struct gin_sym_mr_handle
 	/* Type of registration (NCCL_PTR_HOST, NCCL_PTR_CUDA) */
 	int type;
 	/* GDRCopy handle */
-	gdr_mh_t gdr_mr_handle;
-	/* Host-mapped pointer to this memory from GDRCopy */
-	void *host_map;
-	/* Original GDRCopy page-aligned mapped pointer (used for gdr_unmap) */
-	void *gdr_mapped_ptr;
-	size_t gdr_reglen;
+	nccl_ofi_device_copy::RegHandle *gdr_handle;
 
 	/* Remote MR information for each peer rank */
 	std::vector<gin_remote_mr> remote_mr;
@@ -162,15 +159,15 @@ public:
 	   here we want a round-robin-only scheduler.) */
 	uint16_t next_rail_id;
 
-	/* Pointer to the context's GDRCopy context (created during initialization) */
-	nccl_ofi_gdrcopy_ctx *gdr_ctx;
+	/* Reference to the context's copy context (created during initialization) */
+	nccl_ofi_device_copy &copy_ctx;
 
 	nccl_ofi_gin_comm(nccl_net_ofi_domain_t &domain_arg, int dev_id_,
 			  int rank_,
 			  int nranks_,
 			  nccl_net_ofi_send_comm_t *s_comm_,
 			  nccl_net_ofi_recv_comm_t *r_comm_,
-			  nccl_ofi_gdrcopy_ctx *gdr_ctx_);
+			  nccl_ofi_device_copy &copy_ctx_);
 
 	~nccl_ofi_gin_comm();
 

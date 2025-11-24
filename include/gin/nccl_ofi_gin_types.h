@@ -45,13 +45,15 @@ struct nccl_net_ofi_gin_signal_metadata_msg_t {
 };
 
 struct nccl_ofi_gin_ctx {
-	std::unique_ptr<nccl_ofi_gdrcopy_ctx> gdrcopy_ctx;
 
-	nccl_ofi_gin_ctx() {
-		gdrcopy_ctx.reset(nccl_ofi_gdrcopy_ctx::create());
-		if (!gdrcopy_ctx) {
-			throw std::runtime_error("Failed to create GDRcopy context");
-		}
+	nccl_ofi_device_copy *copy_ctx;
+
+	nccl_ofi_gin_ctx() :
+		copy_ctx(new nccl_ofi_gdrcopy_ctx())
+	{ }
+
+	~nccl_ofi_gin_ctx() {
+		delete copy_ctx;
 	}
 };
 

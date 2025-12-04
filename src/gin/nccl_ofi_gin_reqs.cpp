@@ -219,3 +219,49 @@ nccl_net_ofi_gin_metadata_send_req_t::~nccl_net_ofi_gin_metadata_send_req_t()
 {
 	nccl_ofi_freelist_entry_free(metadata_fl, metadata_elem);
 }
+
+
+int nccl_net_ofi_gin_iputsignal_req_t::test(int *done)
+{
+	*done = 0;
+
+	if (write_req) {
+		bool write_done = false;
+		int ret = write_req->test(write_done);
+		if (ret != 0) return ret;
+		if (write_done) {
+			delete write_req;
+			write_req = nullptr;
+		}
+	}
+
+	if (send_req) {
+		bool send_done = false;
+		int ret = send_req->test(send_done);
+		if (ret != 0) return ret;
+		if (send_done) {
+			delete send_req;
+			send_req = nullptr;
+		}
+	}
+
+	bool reqs_done = !(write_req || send_req);
+	if (reqs_done) {
+		bool &ack_outstanding =
+			gin_comm->rank_comms[peer_rank].active_put_signal
+			[msg_seq_num % NCCL_OFI_MAX_REQUESTS];
+
+		*done = !ack_outstanding;
+	}
+
+	if (*done) {
+		delete this;
+	}
+
+	/* If not done, today the plugin net code will progress the CQ here. For
+	   GIN, given NCCL's current usage, this isn't necessary, because GIN
+	   has a separate ginProgress call, and NCCL's progress thread will
+	   continually call `ginProgress` anyway. */
+
+	return 0;
+}

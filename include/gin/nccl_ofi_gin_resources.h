@@ -141,7 +141,8 @@ struct nccl_ofi_gin_domain_holder
 
 	~nccl_ofi_gin_domain_holder()
 	{
-		domain.decrement_ref_cnt();
+		domain.set_gin_resources(nullptr);
+		domain.release_domain(false, false);
 	}
 };
 
@@ -182,6 +183,9 @@ private:
 	std::deque<nccl_net_ofi_gin_op_req_t *> pending_requests;
 
 	void post_rx_buffs_on_rail(nccl_ofi_gin_ep_rail_t &rail, size_t num_buffers);
+
+	/* Number of associated comms */
+	size_t ref_cnt = 0;
 
 public:
 	nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg);
@@ -226,6 +230,23 @@ public:
 	 * completion queue
 	 */
 	int retry_pending_reqs();
+
+	/**
+	 * Called when a new communicator is associated with this resource object
+	 */
+	void increment_ref_cnt() {
+		this->ref_cnt++;
+	}
+
+	/**
+	 * Called when an associated communicator is closed
+	 */
+	void release() {
+		this->ref_cnt--;
+		if (this->ref_cnt == 0) {
+			delete this;
+		}
+	}
 };
 
 

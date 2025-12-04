@@ -126,9 +126,17 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 
 	auto &domain = *(gin_l_comm->domain);
 
-	std::unique_ptr<nccl_ofi_gin_comm_t> gin_comm = std::make_unique<nccl_ofi_gin_comm_t>
-		(domain, domain.get_device()->dev_id, rank, nranks,
-		 s_comm, r_comm, *gin_ctx->copy_ctx);
+	/* Create a GIN resources object if it does not exist */
+	auto *resources = domain.get_gin_resources();
+	if (resources == nullptr) {
+		resources = new nccl_ofi_gin_resources(domain);
+		domain.set_gin_resources(resources);
+	}
+
+	nccl_ofi_gin_comm_t *gin_comm = new nccl_ofi_gin_comm_t(*resources,
+								domain.get_device()->dev_id,
+								rank, nranks, s_comm, r_comm,
+								*gin_ctx->copy_ctx);
 
 	std::vector<gin_connect_handle> all_handles(nranks, gin_connect_handle{ });
 	gin_connect_handle &my_gin_handle = all_handles[rank];
@@ -152,8 +160,9 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 
 	gin_comm->rank_comms.resize(nranks);
 
-	ret = nccl_ofi_gin_allgather(gin_comm.get(), all_handles.data(), sizeof(gin_connect_handle));
+	ret = nccl_ofi_gin_allgather(gin_comm, all_handles.data(), sizeof(gin_connect_handle));
 	if (ret != 0) {
+		delete gin_comm;
 		return ret;
 	}
 
@@ -168,19 +177,21 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 			ret = rail_addr_insert(gin_ep.control_rails[r], gin_handle.control_ep_names[r], i,
 					       remote_rank_comm.control_address[r], gin_comm->ctrl_rank_map[r]);
 			if (ret != 0) {
+				delete gin_comm;
 				return ret;
 			}
 
 			ret = rail_addr_insert(gin_ep.rails[r], gin_handle.ep_names[r], i,
 					       remote_rank_comm.address[r], gin_comm->rank_map[r]);
 			if (ret != 0) {
+				delete gin_comm;
 				return ret;
 			}
 			remote_rank_comm.write_ack_buff_mr_key[r] = gin_handle.write_ack_buff_mr_key[r];
 		}
 	}
 
-	(*gin_comm_out) = gin_comm.release();
+	(*gin_comm_out) = gin_comm;
 	return 0;
 }
 
@@ -524,67 +535,11 @@ int gin_deregMrSym(nccl_ofi_gin_comm* comm, gin_sym_mr_handle* mr_handle)
 	return 0;
 }
 
-static void gin_iputsignal_req_free(nccl_net_ofi_req_t *base_req)
-{
-	auto *req = reinterpret_cast<nccl_net_ofi_gin_iputsignal_req_t *>(base_req);
-	delete req;
-}
-
-static int gin_iputsignal_req_test(nccl_net_ofi_req_t *base_req, int *done, int *size)
-{
-	auto *req = reinterpret_cast<nccl_net_ofi_gin_iputsignal_req_t *>(base_req);
-	auto gin_comm = req->gin_comm;
-
-	*done = 0;
-
-	if (req->write_req) {
-		bool write_done = false;
-		int ret = req->write_req->test(write_done);
-		if (ret != 0) return ret;
-		if (write_done) {
-			delete req->write_req;
-			req->write_req = nullptr;
-		}
-	}
-
-	if (req->send_req) {
-		bool send_done = false;
-		int ret = req->send_req->test(send_done);
-		if (ret != 0) return ret;
-		if (send_done) {
-			delete req->send_req;
-			req->send_req = nullptr;
-		}
-	}
-
-	bool reqs_done = !(req->write_req || req->send_req);
-	if (reqs_done) {
-		bool &ack_outstanding =
-			gin_comm->rank_comms[req->peer_rank].active_put_signal
-			[req->msg_seq_num % NCCL_OFI_MAX_REQUESTS];
-
-		*done = !ack_outstanding;
-	}
-
-	if (*done) {
-		/* This argument is part of the test() interface, but is not used
-		   in GIN plugin. */
-		*size = 0;
-		gin_iputsignal_req_free(&req->base);
-	}
-
-	/* If not done, today the plugin net code will progress the CQ here. For
-	   GIN, given NCCL's current usage, this isn't necessary, because GIN
-	   has a separate ginProgress call, and NCCL's progress thread will
-	   continually call `ginProgress` anyway. */
-
-	return 0;
-}
-
 int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_handle* srcMhandle,
 		   size_t size, uint64_t dstOff, gin_sym_mr_handle* dstMhandle,
 		   uint32_t rank, uint64_t signalOff, gin_sym_mr_handle* signalMhandle,
-		   uint64_t signalValue, uint32_t signalOp, nccl_net_ofi_req_t** request)
+		   uint64_t signalValue, uint32_t signalOp,
+		   nccl_net_ofi_gin_iputsignal_req_t** request)
 {
 	if (signalOp != 0 /* null op */ && signalOp != NCCL_NET_SIGNAL_OP_INC &&
 	    signalOp != NCCL_NET_SIGNAL_OP_ADD) {
@@ -696,7 +651,6 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 	}
 
 	auto *req = new nccl_net_ofi_gin_iputsignal_req_t {};
-	req->base.test = gin_iputsignal_req_test;
 	req->gin_comm = gin_comm;
 	req->msg_seq_num = msg_seq_num;
 	req->peer_rank = rank;
@@ -706,16 +660,18 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 	rank_comm.active_put_signal[req->msg_seq_num % NCCL_OFI_MAX_REQUESTS] = true;
 	rank_comm.next_target_seq_num = (rank_comm.next_target_seq_num + 1) & GIN_IMM_SEQ_MASK;
 
-	*request = &req->base;
+	*request = req;
 	return 0;
 }
 
-nccl_ofi_gin_comm::nccl_ofi_gin_comm(nccl_net_ofi_domain_t &domain_arg, int dev_id_, int rank_, int nranks_,
+nccl_ofi_gin_comm::nccl_ofi_gin_comm(nccl_ofi_gin_resources &resources_arg, int dev_id_,
+				     int rank_, int nranks_,
 				     nccl_net_ofi_send_comm_t *s_comm_,
 				     nccl_net_ofi_recv_comm_t *r_comm_,
 				     nccl_ofi_device_copy &copy_ctx_)
 				     :
-		resources(domain_arg),
+		resources(resources_arg),
+		resource_releaser{resources},
 		rank(rank_),
 		nranks(nranks_),
 		s_comm(s_comm_),
@@ -743,6 +699,7 @@ nccl_ofi_gin_comm::nccl_ofi_gin_comm(nccl_net_ofi_domain_t &domain_arg, int dev_
 	}
 
 	resources.set_comm(local_comm_id, *this);
+	resources.increment_ref_cnt();
 }
 
 

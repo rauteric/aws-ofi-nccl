@@ -15,6 +15,7 @@
 #include <sys/mman.h>
 #include <ctype.h>
 
+#include "gin/nccl_ofi_gin_resources.h"
 #include "nccl_ofi.h"
 #include "nccl_ofi_assert.h"
 #include "nccl_ofi_environ.h"
@@ -916,7 +917,8 @@ int nccl_net_ofi_domain_t::release_domain(bool skip_device_lock, bool force_clea
 
 nccl_net_ofi_domain_t::nccl_net_ofi_domain_t(nccl_net_ofi_device_t *device_arg)
 	: device(device_arg),
-	ref_cnt(0)
+	  ref_cnt(0),
+	  gin_resources(nullptr)
 {
 	int ret;
 
@@ -1007,6 +1009,11 @@ int nccl_net_ofi_domain_t::release_all_ep()
 
 nccl_net_ofi_domain_t::~nccl_net_ofi_domain_t()
 {
+	if (gin_resources != nullptr) {
+		delete gin_resources;
+		gin_resources = nullptr;
+	}
+
 	if (mr_cache != nullptr) {
 		nccl_ofi_mr_cache_finalize(mr_cache);
 	}

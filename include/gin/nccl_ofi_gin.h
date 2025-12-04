@@ -97,6 +97,18 @@ struct gin_sym_mr_handle
 	std::vector<gin_remote_mr> remote_mr;
 };
 
+/**
+ * Resource releaser, just to make sure it is cleaned up properly.
+ */
+struct nccl_ofi_gin_resource_releaser
+{
+	nccl_ofi_gin_resources &resources;
+
+	~nccl_ofi_gin_resource_releaser()
+	{
+		resources.release();
+	}
+};
 
 /**
  * This represents the main GIN communicator
@@ -104,7 +116,8 @@ struct gin_sym_mr_handle
 class nccl_ofi_gin_comm
 {
 public:
-	nccl_ofi_gin_resources resources;
+	nccl_ofi_gin_resources &resources;
+	nccl_ofi_gin_resource_releaser resource_releaser;
 
 	uint32_t local_comm_id;
 
@@ -160,7 +173,7 @@ public:
 	/* Reference to the context's copy context (created during initialization) */
 	nccl_ofi_device_copy &copy_ctx;
 
-	nccl_ofi_gin_comm(nccl_net_ofi_domain_t &domain_arg, int dev_id_,
+	nccl_ofi_gin_comm(nccl_ofi_gin_resources &resources_arg, int dev_id_,
 			  int rank_,
 			  int nranks_,
 			  nccl_net_ofi_send_comm_t *s_comm_,
@@ -249,7 +262,8 @@ int gin_deregMrSym(nccl_ofi_gin_comm* comm, gin_sym_mr_handle* mr_handle);
 int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_handle* srcMhandle,
 		   size_t size, uint64_t dstOff, gin_sym_mr_handle* dstMhandle,
 		   uint32_t rank, uint64_t signalOff, gin_sym_mr_handle* signalMhandle,
-		   uint64_t signalValue, uint32_t signalOp, nccl_net_ofi_req_t** request);
+		   uint64_t signalValue, uint32_t signalOp,
+		   nccl_net_ofi_gin_iputsignal_req_t** request);
 
 /**
  * Callback for metadata completion. (These will eventually be methods of the gin_comm class.)

@@ -227,9 +227,8 @@ static ncclResult_t nccl_ofi_gin_closeListen(void* listenComm)
 
 static ncclResult_t nccl_ofi_gin_test(void* collComm, void* request, int* done)
 {
-	nccl_net_ofi_req_t *req = static_cast<nccl_net_ofi_req_t *>(request);
-	int size;
-	int ret = req->test(req, done, &size);
+	auto *req = static_cast<nccl_net_ofi_gin_iputsignal_req_t *>(request);
+	int ret = req->test(done);
 	return nccl_net_ofi_retval_translate(ret);
 }
 
@@ -244,7 +243,7 @@ static ncclResult_t nccl_ofi_gin_iputSignal(void* collComm, uint64_t srcOff, voi
 	auto *dst_mr_handle = static_cast<gin_sym_mr_handle *>(dstMhandle);
 	auto *signal_mr_handle = static_cast<gin_sym_mr_handle *>(signalMhandle);
 
-	nccl_net_ofi_req_t *req = nullptr;
+	nccl_net_ofi_gin_iputsignal_req_t *req = nullptr;
 	int ret = gin_iputSignal(gin_comm, srcOff, src_mr_handle, size, dstOff, dst_mr_handle,
 				 rank, signalOff, signal_mr_handle, signalValue, signalOp, &req);
 	if (ret != 0) {

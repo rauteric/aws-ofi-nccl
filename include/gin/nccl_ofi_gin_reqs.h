@@ -233,9 +233,6 @@ struct nccl_net_ofi_gin_recv_req_t : public nccl_net_ofi_gin_op_req_t {
 
 
 struct nccl_net_ofi_gin_iputsignal_req_t {
-
-	nccl_net_ofi_req_t base;
-
 	uint32_t peer_rank;
 
 	/* Associated Comm object */
@@ -249,6 +246,8 @@ struct nccl_net_ofi_gin_iputsignal_req_t {
 	nccl_net_ofi_gin_write_req_t *write_req;
 	/* Metadata send request */
 	nccl_net_ofi_gin_metadata_send_req_t *send_req;
+
+	int test(int *done);
 };
 
 #endif

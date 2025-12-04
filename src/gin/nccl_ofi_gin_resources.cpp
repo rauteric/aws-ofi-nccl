@@ -316,20 +316,49 @@ void nccl_ofi_gin_ep_t::dereg_mr(nccl_ofi_gin_mr_handle_t *handle_ptr)
 }
 
 
-static inline struct fi_info *get_rx_cq_info(struct fi_info *info)
+/**
+ * Much of this taken from the same function in RDMA transport
+ */
+static inline void get_hints(struct fi_info &hints)
+{
+	hints.caps = 0;
+
+	/* Primary Capabilities */
+	hints.caps = FI_MSG | FI_RMA | FI_HMEM;
+
+	/* Secondary Capabilities. GIN requires FI_SOURCE for `fi_cq_readfrom`. */
+	hints.caps |= FI_LOCAL_COMM | FI_REMOTE_COMM | FI_SOURCE;
+
+	/* Mode. GIN sets `FI_RX_CQ_DATA` as an indirect way to disable unsolicited write */
+	hints.mode = FI_CONTEXT | FI_CONTEXT2 | FI_RX_CQ_DATA;
+
+	hints.ep_attr->type = FI_EP_RDM;
+
+	hints.domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_HMEM | FI_MR_VIRT_ADDR |
+		FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+	hints.domain_attr->mr_key_size = (size_t) ofi_nccl_mr_key_size();
+	hints.domain_attr->threading = FI_THREAD_COMPLETION;
+
+	hints.domain_attr->control_progress = nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
+	hints.domain_attr->data_progress = nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
+
+	/* The GIN transport requires fi_writedata support with 32 bits
+	   (4 bytes) of immediate data */
+	hints.domain_attr->cq_data_size = 4;
+}
+
+
+static inline struct fi_info *get_gin_info(struct fi_info *info)
 {
 	/* We need to call fi_getinfo again, but this time pass FI_RX_CQ_DATA */
-	ofi_info_ptr rx_cq_info = ofi_info_ptr(fi_dupinfo(info));
+	ofi_info_ptr gin_info = ofi_info_ptr(fi_dupinfo(info));
 
-	rx_cq_info->mode |= FI_RX_CQ_DATA;
-	/* FI_SOURCE needed for fi_cq_readfrom */
-	rx_cq_info->caps |= FI_SOURCE;
-	rx_cq_info->domain_attr->cq_data_size = 4;
+	get_hints(*gin_info.get());
 
 	struct fi_info *results = nullptr;
-	int ret = fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr, 0ULL, rx_cq_info.get(), &results);
+	int ret = fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr, 0ULL, gin_info.get(), &results);
 	if (ret != 0) {
-		throw std::runtime_error("Failed to get rx_cq_info");
+		throw std::runtime_error("Failed to get gin_info");
 	};
 
 	/* There should only be exactly one result, that supports everything we
@@ -363,10 +392,10 @@ nccl_ofi_gin_ep_rail_t::nccl_ofi_gin_ep_rail_t(uint16_t rail_id_, nccl_net_ofi_d
 	av = std::move(av_result.resource);
 
 	struct fi_info *info = domain.get_device()->get_ofi_infos()[rail_id];
-	ofi_info_ptr rx_cq_info(get_rx_cq_info(info));
+	ofi_info_ptr gin_info(get_gin_info(info));
 
 	/* Create ep */
-	auto ep_result = nccl_ofi_ofiutils_ep_create(rx_cq_info.get(), *ofi_domain, av, cq);
+	auto ep_result = nccl_ofi_ofiutils_ep_create(gin_info.get(), *ofi_domain, av, cq);
 	if (ep_result.is_failure()) {
 		throw std::runtime_error("Failed to create ep");
 	}

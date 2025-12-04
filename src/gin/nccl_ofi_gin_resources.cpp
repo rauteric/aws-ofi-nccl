@@ -442,7 +442,7 @@ void nccl_ofi_gin_resources::post_rx_buffs_on_rail(nccl_ofi_gin_ep_rail_t &rail,
 {
 	for (size_t i = 0; i < num_buffers; i++) {
 		recv_reqs.emplace_back(*this, rail);
-		int ret = recv_reqs.back().post();
+		int ret = recv_reqs.back().post_or_add_pending();
 		if (ret != 0) {
 			throw std::runtime_error("Failed to post recv req");
 		}
@@ -484,6 +484,27 @@ nccl_ofi_gin_resources::nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg
 		post_rx_buffs_on_rail(gin_ep.rails[r], num_buffers_per_rail);
 	}
 }
+
+
+int nccl_ofi_gin_resources::retry_pending_reqs()
+{
+	for (auto it = pending_requests.begin(); it != pending_requests.end(); ) {
+		auto req = *it;
+		int ret = req->post();
+		if (ret == 0) {
+			it = pending_requests.erase(it);
+		} else if (ret == -FI_EAGAIN) {
+			ret = 0;
+			break;
+		} else {
+			it = pending_requests.erase(it);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 
 nccl_ofi_gin_resources::~nccl_ofi_gin_resources()
 {

@@ -207,7 +207,7 @@ static inline int writedata_ack(nccl_ofi_gin_comm *gin_comm, unsigned int peer_r
 
 	int ret = req->post();
 	if (ret == -FI_EAGAIN) {
-		gin_comm->pending_requests.push_back(req);
+		gin_comm->resources.add_pending_req(req);
 		ret = 0;
 	} else if (ret != 0) {
 		delete req;
@@ -640,7 +640,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 
 		ret = write_req->post();
 		if (ret == -FI_EAGAIN) {
-			gin_comm->pending_requests.push_back(write_req);
+			gin_comm->resources.add_pending_req(write_req);
 			ret = 0;
 		} else if (ret != 0) {
 			delete write_req;
@@ -684,7 +684,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 
 		ret = send_req->post();
 		if (ret == -FI_EAGAIN) {
-			gin_comm->pending_requests.push_back(send_req);
+			gin_comm->resources.add_pending_req(send_req);
 			ret = 0;
 		} else if (ret != 0) {
 			if (write_req) {
@@ -707,25 +707,6 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 	rank_comm.next_target_seq_num = (rank_comm.next_target_seq_num + 1) & GIN_IMM_SEQ_MASK;
 
 	*request = &req->base;
-	return 0;
-}
-
-int nccl_ofi_gin_comm::retry_pending_reqs()
-{
-	for (auto it = pending_requests.begin(); it != pending_requests.end(); ) {
-		auto req = *it;
-		int ret = req->post();
-		if (ret == 0) {
-			it = pending_requests.erase(it);
-		} else if (ret == -FI_EAGAIN) {
-			ret = 0;
-			break;
-		} else {
-			it = pending_requests.erase(it);
-			return ret;
-		}
-	}
-
 	return 0;
 }
 
@@ -785,7 +766,7 @@ int nccl_ofi_gin_comm::progress()
 		return ret;
 	}
 
-	ret = retry_pending_reqs();
+	ret = resources.retry_pending_reqs();
 
 	return ret;
 }

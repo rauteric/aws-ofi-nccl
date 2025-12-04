@@ -5,8 +5,6 @@
 #ifndef NCCL_OFI_GIN_H
 #define NCCL_OFI_GIN_H
 
-#include <deque>
-
 #include "nccl_ofi.h"
 #include "nccl_ofi_rdma.h"
 #include "nccl_ofi_freelist.h"
@@ -171,25 +169,12 @@ public:
 
 	~nccl_ofi_gin_comm();
 
-	/**
-	 * Queue of pending Libfabric requests to be retried when CQ is
-	 * processed.
-	 */
-	std::deque<nccl_net_ofi_gin_op_req_t *> pending_requests;
-
 	/* Progress the completion queue and try posting any pending requests */
 	int progress();
 
 	/* Wait for any outstanding requests as necessary. Should be called before
 	   the GIN comm is destructed. */
 	int await_pending_requests();
-
-private:
-	/**
-	 * Retry requests that were pending due to EAGAIN or lack of space in
-	 * completion queue
-	 */
-	int retry_pending_reqs();
 };
 
 /** TODO: these should eventually be methods of the corresponding classes */

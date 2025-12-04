@@ -6,6 +6,8 @@
 #define NCCL_OFI_GIN_RESOURCES_H
 
 #include "rdma/fabric.h"
+
+#include <deque>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -174,6 +176,11 @@ private:
 	/* Reqs for RX buffers */
 	std::vector<nccl_net_ofi_gin_recv_req_t> recv_reqs;
 
+	/**
+	 * Queue of pending Libfabric requests to be retried
+	 */
+	std::deque<nccl_net_ofi_gin_op_req_t *> pending_requests;
+
 	void post_rx_buffs_on_rail(nccl_ofi_gin_ep_rail_t &rail, size_t num_buffers);
 
 public:
@@ -211,6 +218,14 @@ public:
 
 	void *get_write_ack_buffer_addr() { return write_ack_buffer.addr; }
 	nccl_ofi_gin_mr_handle_t *get_write_ack_buffer_mr_handle() { return write_ack_buffer.mr_handle; }
+
+	void add_pending_req(nccl_net_ofi_gin_op_req_t *req) { pending_requests.push_back(req); }
+
+	/**
+	 * Retry requests that were pending due to EAGAIN or lack of space in
+	 * completion queue
+	 */
+	int retry_pending_reqs();
 };
 
 

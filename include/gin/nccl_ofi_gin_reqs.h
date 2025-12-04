@@ -223,6 +223,12 @@ struct nccl_net_ofi_gin_recv_req_t : public nccl_net_ofi_gin_op_req_t {
 				    uint16_t rail_id) override;
 
 	int post() override;
+
+	/**
+	 * Calls post(); if post() returns -FI_EAGAIN, adds the request to the
+	 * pending list and returns 0
+	 */
+	int post_or_add_pending();
 };
 
 

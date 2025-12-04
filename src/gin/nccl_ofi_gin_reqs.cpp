@@ -5,7 +5,6 @@
 #include "gin/nccl_ofi_gin_reqs.h"
 #include "gin/nccl_ofi_gin.h"
 
-
 static inline int gin_handle_cq_entry(nccl_net_ofi_gin_context *ctx,
 				      struct fi_cq_entry *cq_entry_base,
 				      fi_addr_t src_addr,
@@ -148,7 +147,7 @@ int nccl_net_ofi_gin_recv_req_t::handle_cq_entry(nccl_net_ofi_gin_context *_ctx,
 	}
 
 	/* Repost this req */
-	return post();
+	return post_or_add_pending();
 }
 
 
@@ -160,22 +159,22 @@ int nccl_net_ofi_gin_recv_req_t::post()
 	size_t size = sizeof(nccl_net_ofi_gin_signal_metadata_msg_t);
 	void *desc = fi_mr_desc(mr_handle->mr[rail.rail_id].get());
 
-	auto op = [=] {
-		ssize_t rc = fi_recv(ofi_ep, rx_buff_elem->ptr,
-					size, desc, FI_ADDR_UNSPEC, &ctx.ofi_ctx);
-		if (rc != 0 && rc != -FI_EAGAIN) {
-			NCCL_OFI_WARN("Failed call to fi_recv; RC: %zd", rc);
-		}
-		return rc;
-	};
+	ssize_t rc = fi_recv(ofi_ep, rx_buff_elem->ptr,
+			     size, desc, FI_ADDR_UNSPEC, &ctx.ofi_ctx);
+	if (rc != 0 && rc != -FI_EAGAIN) {
+		NCCL_OFI_WARN("Failed to post recv. RC: %zd", rc);
+	}
 
-	int ret = op();
+	return rc;
+}
+
+
+int nccl_net_ofi_gin_recv_req_t::post_or_add_pending()
+{
+	int ret = post();
 	if (ret == -FI_EAGAIN) {
-		/* TODO: handle this! The pending requests queue should really be
-			at the endpoint level, as it is for RDMA transport */
-		assert(false); abort();
-	} else if (ret != 0) {
-		return ret;
+		resources.add_pending_req(this);
+		ret = 0;
 	}
 
 	return ret;

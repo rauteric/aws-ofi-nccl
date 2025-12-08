@@ -187,7 +187,11 @@ private:
 	/* Number of associated comms */
 	size_t ref_cnt = 0;
 
+	/* For rail scheduling. Currently we do round-robin among rails. */
+	uint16_t next_rail_id = 0;
+
 public:
+
 	nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg);
 
 	~nccl_ofi_gin_resources();
@@ -230,6 +234,17 @@ public:
 	 * completion queue
 	 */
 	int retry_pending_reqs();
+
+	/**
+	 * Get next rail for transfer. Uses round-robin scheduling.
+	 *
+	 * @return	Next rail id
+	 */
+	uint16_t get_next_rail() {
+		uint16_t rail_id = next_rail_id;
+		next_rail_id = (next_rail_id + 1) % gin_ep.num_rails;
+		return rail_id;
+	}
 
 	/**
 	 * Called when a new communicator is associated with this resource object

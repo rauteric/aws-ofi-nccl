@@ -551,8 +551,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 	auto &rank_comm = gin_comm->rank_comms[rank];
 	uint16_t msg_seq_num = rank_comm.next_target_seq_num;
 	uint32_t remote_comm_id = rank_comm.comm_id;
-	uint16_t rail_id = gin_comm->next_rail_id;
-	gin_comm->next_rail_id = (gin_comm->next_rail_id + 1) % gin_ep.num_rails;
+	uint16_t rail_id = gin_comm->resources.get_next_rail();
 
 	/* Given NCCL's max request limit, this slot shouldn't currently be in
 	   use. */
@@ -678,7 +677,6 @@ nccl_ofi_gin_comm::nccl_ofi_gin_comm(nccl_ofi_gin_resources &resources_arg, int 
 		r_comm(r_comm_),
 		outstanding_ack_counter(0),
 		metadata_fl(nullptr, &freelist_deleter),
-		next_rail_id(0),
 		copy_ctx(copy_ctx_)
 {
 	nccl_ofi_freelist_t *metadata_fl_ptr = nullptr;

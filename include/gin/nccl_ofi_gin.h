@@ -163,13 +163,6 @@ public:
 	   lookup. Not sure yet if that is the right thing to do. */
 	std::unordered_map<void *, gin_sym_mr_handle *> mr_handle_map;
 
-	/* For rail scheduling. Currently we do round-robin among rails.
-	   TODO:
-	   This should be a scheduler object stored with the domain. (The
-	   current domain scheduler will do striping for large messages, but
-	   here we want a round-robin-only scheduler.) */
-	uint16_t next_rail_id;
-
 	/* Reference to the context's copy context (created during initialization) */
 	nccl_ofi_device_copy &copy_ctx;
 

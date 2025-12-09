@@ -10,8 +10,15 @@
 
 #include "gin/nccl_ofi_gin_types.h"
 
-/** TODO use freelist-ish thing for these... **/
-
+/**
+ * GIN base request type.
+ * 
+ * Only stores a freelist element so the request can be freed
+ */
+struct nccl_net_ofi_gin_base_req
+{
+	nccl_ofi_freelist_elem_t *fl_elem = nullptr;
+};
 
 /**
  * Struct enclosing the context parameter we pass to every Libfabric operation.
@@ -55,7 +62,7 @@ struct nccl_net_ofi_gin_context {
  * Allocated upon receiving the first segment of the signal, or the metadata.
  * Freed when the signal is delivered.
  */
-struct nccl_net_ofi_gin_iputsignal_recv_req
+struct nccl_net_ofi_gin_iputsignal_recv_req : public nccl_net_ofi_gin_base_req
 {
 	uint32_t total_segments;
 
@@ -65,7 +72,7 @@ struct nccl_net_ofi_gin_iputsignal_recv_req
 	nccl_net_ofi_gin_signal_metadata_msg_t metadata;
 };
 
-class nccl_net_ofi_gin_op_req_t {
+class nccl_net_ofi_gin_op_req_t : public nccl_net_ofi_gin_base_req {
 
 public:
 	nccl_net_ofi_gin_context ctx;
@@ -165,10 +172,11 @@ public:
  * A request that frees itself after completion. Used for sending
  * the writedata ack after signal delivery.
  *
- * Note: This request must be allocated using new(). It remains allocated
- * until the callback (handle_cq_entry) is invoked, at which point it
+ * Note: This request must be allocated from gin_comm->resources request pool.
+ * It remains allocated until the callback (handle_cq_entry) is invoked, at
+ * which point it
  * 1) updates gin_comm->outstanding_ack_counter
- * 2) deletes itself
+ * 2) deletes itself (returns to request pool)
  */
 struct nccl_net_ofi_gin_writeack_req_t : public nccl_net_ofi_gin_op_req_t {
 private:
@@ -232,7 +240,7 @@ struct nccl_net_ofi_gin_recv_req_t : public nccl_net_ofi_gin_op_req_t {
 };
 
 
-struct nccl_net_ofi_gin_iputsignal_req_t {
+struct nccl_net_ofi_gin_iputsignal_req_t : public nccl_net_ofi_gin_base_req{
 	uint32_t peer_rank;
 
 	/* Associated Comm object */
@@ -248,6 +256,18 @@ struct nccl_net_ofi_gin_iputsignal_req_t {
 	nccl_net_ofi_gin_metadata_send_req_t *send_req;
 
 	int test(int *done);
+};
+
+/**
+ * Union of all requests, used to calculate freelist size
+ */
+union nccl_net_ofi_gin_union_req {
+	nccl_net_ofi_gin_iputsignal_recv_req recv_req;
+	nccl_net_ofi_gin_write_req_t write_req;
+	nccl_net_ofi_gin_metadata_send_req_t metadata_send_req;
+	nccl_net_ofi_gin_writeack_req_t writeack_req;
+	nccl_net_ofi_gin_recv_req_t recv_buf_req;
+	nccl_net_ofi_gin_iputsignal_req_t iput_sig_req;
 };
 
 #endif

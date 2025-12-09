@@ -457,7 +457,8 @@ nccl_ofi_gin_resources::nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg
 	  gin_ep(&domain_arg),
 	  write_ack_buffer(gin_ep),
 	  rx_buff_fl(nullptr, &freelist_deleter),
-	  recv_reqs()
+	  recv_reqs(),
+	  req_fl(nullptr, &freelist_deleter)
 {
 	uint16_t num_rails = gin_ep.num_rails;
 
@@ -483,6 +484,19 @@ nccl_ofi_gin_resources::nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg
 		post_rx_buffs_on_rail(gin_ep.control_rails[r], num_buffers_per_rail);
 		post_rx_buffs_on_rail(gin_ep.rails[r], num_buffers_per_rail);
 	}
+
+	/* Freelist for requests */
+	nccl_ofi_freelist_t *req_fl_tmp = nullptr;
+	ret = nccl_ofi_freelist_init
+	(
+		sizeof(nccl_net_ofi_gin_union_req),
+		1024, 0, 1024,
+		nullptr, nullptr, &req_fl_tmp
+	);
+	if (ret != 0) {
+		throw std::runtime_error("Failed to init req_fl");
+	}
+	this->req_fl.reset(req_fl_tmp);
 }
 
 

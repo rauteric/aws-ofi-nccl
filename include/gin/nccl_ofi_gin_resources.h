@@ -190,6 +190,9 @@ private:
 	/* For rail scheduling. Currently we do round-robin among rails. */
 	uint16_t next_rail_id = 0;
 
+	/* Requests pool used by all comms of this resource */
+	std::unique_ptr<nccl_ofi_freelist_t, decltype(&freelist_deleter)> req_fl;
+
 public:
 
 	nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg);
@@ -226,6 +229,38 @@ public:
 
 	void *get_write_ack_buffer_addr() { return write_ack_buffer.addr; }
 	nccl_ofi_gin_mr_handle_t *get_write_ack_buffer_mr_handle() { return write_ack_buffer.mr_handle; }
+
+	template<typename T, typename... U> T* get_req_from_pool(U&&... args)
+	{
+		static_assert(sizeof(T) <= sizeof(nccl_net_ofi_gin_union_req), "Request size too large for freelist");
+		auto freelist_elem = nccl_ofi_freelist_entry_alloc(req_fl.get());
+		if (OFI_UNLIKELY(freelist_elem == nullptr)) {
+			throw std::runtime_error("Failed to allocate request from freelist");
+		}
+
+		/* Construct the request */
+		new(freelist_elem->ptr) T(std::forward<U>(args)...);
+		auto* req = static_cast<T *>(freelist_elem->ptr);
+
+		/* Keep a backpointer to freelist element to free */
+		req->fl_elem = freelist_elem;
+
+		return req;
+	}
+
+	template<typename T>
+	void return_req_to_pool(T *req)
+	{
+		/* Cache the fl_elem member since we will destruct the req. */
+		auto *fl_elem = req->fl_elem;
+
+		/* Run req's destructor */
+		req->~T();
+		req = nullptr;
+
+		/* Return to freelist */
+		nccl_ofi_freelist_entry_free(req_fl.get(), fl_elem);
+	}
 
 	void add_pending_req(nccl_net_ofi_gin_op_req_t *req) { pending_requests.push_back(req); }
 

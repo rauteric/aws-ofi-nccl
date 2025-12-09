@@ -211,17 +211,18 @@ static inline int writedata_ack(nccl_ofi_gin_comm *gin_comm, unsigned int peer_r
 
 	auto *ofi_ep = ep.control_rails[rail_id].ofi_ep.get();
 
-	auto *req = new nccl_net_ofi_gin_writeack_req_t(gin_comm, ofi_ep, rail_id, imm_data,
-					    rank_comm.control_address[rail_id],
-					    rank_comm.write_ack_buff_addr,
-					    rank_comm.write_ack_buff_mr_key[rail_id]);
+	auto *req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_writeack_req_t>
+		(gin_comm, ofi_ep, rail_id, imm_data,
+		rank_comm.control_address[rail_id],
+		rank_comm.write_ack_buff_addr,
+		rank_comm.write_ack_buff_mr_key[rail_id]);
 
 	int ret = req->post();
 	if (ret == -FI_EAGAIN) {
 		gin_comm->resources.add_pending_req(req);
 		ret = 0;
 	} else if (ret != 0) {
-		delete req;
+		gin_comm->resources.return_req_to_pool(req);
 		return ret;
 	}
 
@@ -353,7 +354,7 @@ static inline int iput_signal_deliver_all(nccl_ofi_gin_comm *gin_comm, uint64_t 
 					return ret;
 				}
 
-				delete req;
+				gin_comm->resources.return_req_to_pool(req);
 			} else {
 				/* No more signals to deliver */
 				break;
@@ -389,7 +390,9 @@ int gin_handle_signal_write_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t sr
 	auto it = gin_comm->outstanding_iput_signal_recv_reqs.find(map_key);
 	if (it == gin_comm->outstanding_iput_signal_recv_reqs.end()) {
 		/* No entry yet for this thing... */
-		auto *req = new nccl_net_ofi_gin_iputsignal_recv_req { };
+		auto *req = gin_comm->resources.get_req_from_pool
+			<nccl_net_ofi_gin_iputsignal_recv_req>();
+
 		req->num_seg_completions = 1;
 		req->total_segments = total_segms;
 		gin_comm->outstanding_iput_signal_recv_reqs[map_key] = req;
@@ -420,7 +423,9 @@ int gin_handle_signal_metadata_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t
 	auto it = gin_comm->outstanding_iput_signal_recv_reqs.find(map_key);
 	if (it == gin_comm->outstanding_iput_signal_recv_reqs.end()) {
 		/* No entry yet for this thing... */
-		auto *req = new nccl_net_ofi_gin_iputsignal_recv_req { };
+		auto *req = gin_comm->resources.get_req_from_pool
+			<nccl_net_ofi_gin_iputsignal_recv_req>();
+
 		req->num_seg_completions = 1;
 		req->total_segments = metadata_msg->num_segments;
 		req->metadata = *metadata_msg;
@@ -588,7 +593,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 		auto &dest_remote_mr = dstMhandle->remote_mr[rank];
 		uint64_t dest = dest_remote_mr.address + dstOff;
 
-		write_req = new nccl_net_ofi_gin_write_req_t
+		write_req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_write_req_t>
 			(gin_ep.rails[rail_id].ofi_ep.get(), src, size, desc, data,
 			 rank_comm.address[rail_id], dest, dest_remote_mr.mr_key[rail_id]);
 
@@ -597,7 +602,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 			gin_comm->resources.add_pending_req(write_req);
 			ret = 0;
 		} else if (ret != 0) {
-			delete write_req;
+			gin_comm->resources.return_req_to_pool(write_req);
 			return ret;
 		}
 	}
@@ -610,7 +615,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 		metadata_elem =	nccl_ofi_freelist_entry_alloc(gin_comm->metadata_fl.get());
 		if (!metadata_elem) {
 			if (write_req) {
-				delete write_req;
+				gin_comm->resources.return_req_to_pool(write_req);
 			}
 			return -ENOMEM;
 		}
@@ -632,7 +637,7 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 			metadata_send->signal_value = 0;
 		}
 
-		send_req = new nccl_net_ofi_gin_metadata_send_req_t
+		send_req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_metadata_send_req_t>
 			(gin_ep.control_rails[rail_id].ofi_ep.get(), rail_id, metadata_elem,
 			 rank_comm.control_address[rail_id], gin_comm->metadata_fl.get());
 
@@ -642,14 +647,14 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 			ret = 0;
 		} else if (ret != 0) {
 			if (write_req) {
-				delete write_req;
+				gin_comm->resources.return_req_to_pool(write_req);
 			}
-			delete send_req;
+			gin_comm->resources.return_req_to_pool(send_req);
 			return ret;
 		}
 	}
 
-	auto *req = new nccl_net_ofi_gin_iputsignal_req_t {};
+	auto *req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_iputsignal_req_t>();
 	req->gin_comm = gin_comm;
 	req->msg_seq_num = msg_seq_num;
 	req->peer_rank = rank;

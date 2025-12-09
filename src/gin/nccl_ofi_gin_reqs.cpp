@@ -62,7 +62,8 @@ int nccl_net_ofi_gin_writeack_req_t::handle_cq_entry
 	assert(gin_comm->outstanding_ack_counter > 0);
 	gin_comm->outstanding_ack_counter--;
 
-	delete this;
+	gin_comm->resources.return_req_to_pool(this);
+
 	return 0;
 }
 
@@ -230,7 +231,7 @@ int nccl_net_ofi_gin_iputsignal_req_t::test(int *done)
 		int ret = write_req->test(write_done);
 		if (ret != 0) return ret;
 		if (write_done) {
-			delete write_req;
+			gin_comm->resources.return_req_to_pool(write_req);
 			write_req = nullptr;
 		}
 	}
@@ -240,7 +241,7 @@ int nccl_net_ofi_gin_iputsignal_req_t::test(int *done)
 		int ret = send_req->test(send_done);
 		if (ret != 0) return ret;
 		if (send_done) {
-			delete send_req;
+			gin_comm->resources.return_req_to_pool(send_req);
 			send_req = nullptr;
 		}
 	}
@@ -255,7 +256,7 @@ int nccl_net_ofi_gin_iputsignal_req_t::test(int *done)
 	}
 
 	if (*done) {
-		delete this;
+		gin_comm->resources.return_req_to_pool(this);
 	}
 
 	/* If not done, today the plugin net code will progress the CQ here. For

@@ -47,14 +47,12 @@ nccl_ofi_gin_ep_t::nccl_ofi_gin_ep_t(nccl_net_ofi_domain_t *domain_arg) :
 
 	rail_cq.reserve(this->num_rails);
 	rails.reserve(this->num_rails);
-	control_rails.reserve(this->num_rails);
 
 	// Create rails
 	for (uint16_t r = 0; r < this->num_rails; r++) {
 		auto& ofi_domain = ofi_domains[r];
 		rail_cq.emplace_back(create_cq(*ofi_domain));
 		rails.emplace_back(r, *domain, rail_cq[r]);
-		control_rails.emplace_back(r, *domain, rail_cq[r]);
 	}
 }
 
@@ -231,7 +229,6 @@ int nccl_ofi_gin_ep_t::process_cq()
 
 void nccl_ofi_gin_ep_t::close_ofi_eps()
 {
-	control_rails.clear();
 	rails.clear();
 }
 
@@ -255,8 +252,7 @@ int nccl_ofi_gin_ep_t::reg_mr(nccl_ofi_mr_ckey_ref ckey, int type, nccl_ofi_gin_
 {
 	int ret = 0;
 
-	/* Because of complexities involving control rails, we do not support
-	   endpoint_mr mode today (similar to RDMA protocol) */
+	/* We do not support endpoint_mr mode yet */
 	if (OFI_UNLIKELY(endpoint_mr)) {
 		NCCL_OFI_WARN("Endpoint MR mode is not supported yet.");
 		return -EINVAL;
@@ -470,7 +466,7 @@ nccl_ofi_gin_resources::nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg
 	nccl_ofi_freelist_t *rx_buff_fl_tmp = nullptr;
 	int ret = nccl_ofi_freelist_init_mr
 		(sizeof(nccl_net_ofi_gin_signal_metadata_msg_t),
-		num_buffers * 2 /* x2 for data + ctrl */, 0, num_buffers * 2,
+		num_buffers, 0, num_buffers,
 		nullptr, nullptr, gin_freelist_regmr_fn, gin_freelist_deregmr_fn, &gin_ep,
 		1, &rx_buff_fl_tmp);
 	if (ret != 0) {
@@ -479,9 +475,8 @@ nccl_ofi_gin_resources::nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg
 	this->rx_buff_fl.reset(rx_buff_fl_tmp);
 
 	/* Create the receive pool for all rails */
-	recv_reqs.reserve(num_buffers * 2);
+	recv_reqs.reserve(num_buffers);
 	for (uint16_t r = 0; r < num_rails; ++r) {
-		post_rx_buffs_on_rail(gin_ep.control_rails[r], num_buffers_per_rail);
 		post_rx_buffs_on_rail(gin_ep.rails[r], num_buffers_per_rail);
 	}
 
@@ -490,7 +485,7 @@ nccl_ofi_gin_resources::nccl_ofi_gin_resources(nccl_net_ofi_domain_t &domain_arg
 	ret = nccl_ofi_freelist_init
 	(
 		sizeof(nccl_net_ofi_gin_union_req),
-		1024, 0, 1024,
+		1024, 1024, 0,
 		nullptr, nullptr, &req_fl_tmp
 	);
 	if (ret != 0) {

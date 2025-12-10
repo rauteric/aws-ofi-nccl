@@ -58,7 +58,6 @@ private:
 
 public:
 	std::vector<nccl_ofi_gin_ep_rail_t> rails;
-	std::vector<nccl_ofi_gin_ep_rail_t> control_rails;
 
 	int reg_mr(nccl_ofi_mr_ckey_ref ckey, int type, nccl_ofi_gin_mr_handle_t **mhandle);
 

@@ -52,7 +52,6 @@ struct nccl_ofi_gin_peer_rank_info
 	uint16_t next_delivered_signal_seq_num;
 
 	/* Rail addresses */
-	fi_addr_t control_address[MAX_NUM_RAILS];
 	fi_addr_t address[MAX_NUM_RAILS];
 
 	/* Signal acks are zero-byte RDMA writes (with imm data)
@@ -133,8 +132,7 @@ public:
 	/* Remote comm info book */
 	std::vector<nccl_ofi_gin_peer_rank_info> rank_comms;
 
-	/* For each rail (ctrl and data), map of fi_addr => peer comm rank */
-	std::unordered_map<fi_addr_t, uint64_t> ctrl_rank_map[MAX_NUM_RAILS];
+	/* For each rail, map of fi_addr => peer comm rank */
 	std::unordered_map<fi_addr_t, uint64_t> rank_map[MAX_NUM_RAILS];
 
 	/* Map of <rank, msg_seq_num> => recv_req

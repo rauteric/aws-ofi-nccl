@@ -24,16 +24,14 @@ struct gin_connect_handle
 {
 	/* Number of rails */
 	uint16_t num_rails;
-	uint16_t num_control_rails;
 
 	/* A comm identitifer that uniquely identifies the comm on the sender
 	   side. The receiver must use this ID when sending messages to sender */
 	uint32_t comm_id;
 
 	/* Arrays of `MAX_NUM_RAILS` `nccl_ofi_addr`
-	 * structs. The member `num_rails` and `num_control_rails` indicate
+	 * structs. The member `num_rails` indicates
 	 * the number of entries that are in use. */
-	nccl_ofi_addr control_ep_names[MAX_NUM_RAILS];
 	nccl_ofi_addr ep_names[MAX_NUM_RAILS];
 
 	/* Write ack buffer addr and its mr_key */
@@ -144,16 +142,11 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 	auto &gin_ep = gin_comm->resources.get_ep();
 
 	const int num_rails = gin_ep.num_rails;
-	const int num_control_rails = gin_ep.num_rails;
 
 	my_gin_handle.comm_id = gin_comm->local_comm_id;
 	my_gin_handle.num_rails = num_rails;
-	my_gin_handle.num_control_rails = num_control_rails;
 	for (int i = 0; i < num_rails; ++i) {
 		set_rail_address(gin_ep.rails[i], my_gin_handle.ep_names[i]);
-	}
-	for (int i = 0; i < num_control_rails; ++i) {
-		set_rail_address(gin_ep.control_rails[i], my_gin_handle.control_ep_names[i]);
 	}
 
 	set_write_ack_buff_info(gin_comm->resources, my_gin_handle);
@@ -174,13 +167,6 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 		remote_rank_comm.write_ack_buff_addr = gin_handle.write_ack_buff_addr;
 
 		for (int r = 0; r < num_rails; ++r) {
-			ret = rail_addr_insert(gin_ep.control_rails[r], gin_handle.control_ep_names[r], i,
-					       remote_rank_comm.control_address[r], gin_comm->ctrl_rank_map[r]);
-			if (ret != 0) {
-				delete gin_comm;
-				return ret;
-			}
-
 			ret = rail_addr_insert(gin_ep.rails[r], gin_handle.ep_names[r], i,
 					       remote_rank_comm.address[r], gin_comm->rank_map[r]);
 			if (ret != 0) {
@@ -199,7 +185,7 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 static inline int writedata_ack(nccl_ofi_gin_comm *gin_comm, unsigned int peer_rank,
 				unsigned int msg_seq_num)
 {
-	/* For now, always send acks on control rail 0.
+	/* For now, always send acks on rail 0.
 	   TODO round-robin this like the payload data itself. */
 	const int rail_id = 0;
 
@@ -209,11 +195,11 @@ static inline int writedata_ack(nccl_ofi_gin_comm *gin_comm, unsigned int peer_r
 
 	auto &ep = gin_comm->resources.get_ep();
 
-	auto *ofi_ep = ep.control_rails[rail_id].ofi_ep.get();
+	auto *ofi_ep = ep.rails[rail_id].ofi_ep.get();
 
 	auto *req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_writeack_req_t>
 		(gin_comm, ofi_ep, rail_id, imm_data,
-		rank_comm.control_address[rail_id],
+		rank_comm.address[rail_id],
 		rank_comm.write_ack_buff_addr,
 		rank_comm.write_ack_buff_mr_key[rail_id]);
 
@@ -376,8 +362,8 @@ int gin_handle_signal_write_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t sr
 	if (total_segms == WRITEDATA_ACK_NSEG) {
 		/* Special handling for acks */
 		assert(len == 0);
-		/* Acks come on the control rail */
-		uint64_t peer_rank = get_peer_rank(gin_comm, src_addr, gin_comm->ctrl_rank_map[rail_id]);
+
+		uint64_t peer_rank = get_peer_rank(gin_comm, src_addr, gin_comm->rank_map[rail_id]);
 		auto &rank_comm = gin_comm->rank_comms[peer_rank];
 		assert_always(rank_comm.active_put_signal[msg_seq_num % NCCL_OFI_MAX_REQUESTS] == true);
 		rank_comm.active_put_signal[msg_seq_num % NCCL_OFI_MAX_REQUESTS] = false;
@@ -417,7 +403,7 @@ int gin_handle_signal_metadata_completion(nccl_ofi_gin_comm *gin_comm, fi_addr_t
 
 	uint16_t msg_seq_num = metadata_msg->msg_seq_num;
 
-	uint64_t peer_rank = get_peer_rank(gin_comm, src_addr, gin_comm->ctrl_rank_map[rail_id]);
+	uint64_t peer_rank = get_peer_rank(gin_comm, src_addr, gin_comm->rank_map[rail_id]);
 	uint64_t map_key = get_req_map_key(peer_rank, msg_seq_num);
 
 	auto it = gin_comm->outstanding_iput_signal_recv_reqs.find(map_key);
@@ -638,8 +624,8 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 		}
 
 		send_req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_metadata_send_req_t>
-			(gin_ep.control_rails[rail_id].ofi_ep.get(), rail_id, metadata_elem,
-			 rank_comm.control_address[rail_id], gin_comm->metadata_fl.get());
+			(gin_ep.rails[rail_id].ofi_ep.get(), rail_id, metadata_elem,
+			 rank_comm.address[rail_id], gin_comm->metadata_fl.get());
 
 		ret = send_req->post();
 		if (ret == -FI_EAGAIN) {

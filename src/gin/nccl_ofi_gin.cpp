@@ -35,7 +35,7 @@ struct gin_connect_handle
 	nccl_ofi_addr ep_names[MAX_NUM_RAILS];
 
 	/* Write ack buffer addr and its mr_key */
-	uint64_t write_ack_buff_addr;
+	uint64_t write_ack_buff_addr_offset;
 	uint64_t write_ack_buff_mr_key[MAX_NUM_RAILS];
 };
 
@@ -43,7 +43,7 @@ struct gin_connect_handle
 static inline void set_write_ack_buff_info(nccl_ofi_gin_resources &resources,
 					   gin_connect_handle &handle)
 {
-	handle.write_ack_buff_addr = reinterpret_cast<uint64_t>(resources.get_write_ack_buffer_addr());
+	handle.write_ack_buff_addr_offset = resources.get_write_ack_buffer_addr_offset();
 	auto *mr_handle = resources.get_write_ack_buffer_mr_handle();
 
 	for (size_t i = 0; i < resources.get_ep().num_rails; ++i) {
@@ -164,7 +164,7 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 		nccl_ofi_gin_peer_rank_info &remote_rank_comm = gin_comm->rank_comms[i];
 		remote_rank_comm.comm_id = gin_handle.comm_id;
 		remote_rank_comm.next_target_seq_num = 0;
-		remote_rank_comm.write_ack_buff_addr = gin_handle.write_ack_buff_addr;
+		remote_rank_comm.write_ack_buff_addr_offset = gin_handle.write_ack_buff_addr_offset;
 
 		for (int r = 0; r < num_rails; ++r) {
 			ret = rail_addr_insert(gin_ep.rails[r], gin_handle.ep_names[r], i,
@@ -200,7 +200,7 @@ static inline int writedata_ack(nccl_ofi_gin_comm *gin_comm, unsigned int peer_r
 	auto *req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_writeack_req_t>
 		(gin_comm, ofi_ep, rail_id, imm_data,
 		rank_comm.address[rail_id],
-		rank_comm.write_ack_buff_addr,
+		rank_comm.write_ack_buff_addr_offset,
 		rank_comm.write_ack_buff_mr_key[rail_id]);
 
 	int ret = req->post();
@@ -464,6 +464,14 @@ int gin_regMrSymDmaBuf(nccl_ofi_gin_comm* comm, nccl_ofi_mr_ckey_ref ckey, void 
 	gin_remote_mr &my_remote_mr = mr_handle->remote_mr[comm->rank];
 
 	my_remote_mr.address = reinterpret_cast<uintptr_t>(mr_handle->input_address);
+
+	if (virt_addr_mr) {
+		my_remote_mr.address_offset = my_remote_mr.address;
+	} else {
+		/* If virt_addr_mr is not set, provider expects a zero-offset to RDMA ops */
+		my_remote_mr.address_offset = 0;
+	}
+
 	my_remote_mr.num_rails = gin_ep.num_rails;
 
 	if (type == NCCL_PTR_CUDA) {
@@ -570,14 +578,14 @@ int gin_iputSignal(nccl_ofi_gin_comm* gin_comm, uint64_t srcOff, gin_sym_mr_hand
 	nccl_net_ofi_gin_write_req_t *write_req = nullptr;
 
 	if (size > 0) {
-		void *src = reinterpret_cast<void *>(srcMhandle->remote_mr[gin_comm->rank].address + srcOff);
+		void *src = static_cast<uint8_t *>(srcMhandle->input_address) + srcOff;
 		auto *src_mhandle = srcMhandle->local_handle;
 		void *desc = fi_mr_desc(src_mhandle->mr[rail_id].get());
 
 		uint64_t data = GIN_IMM_GET_IMM_DATA(remote_comm_id, msg_seq_num, nseg);
 
 		auto &dest_remote_mr = dstMhandle->remote_mr[rank];
-		uint64_t dest = dest_remote_mr.address + dstOff;
+		uint64_t dest = dest_remote_mr.address_offset + dstOff;
 
 		write_req = gin_comm->resources.get_req_from_pool<nccl_net_ofi_gin_write_req_t>
 			(gin_ep.rails[rail_id].ofi_ep.get(), src, size, desc, data,

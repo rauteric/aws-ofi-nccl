@@ -58,7 +58,7 @@ struct nccl_ofi_gin_peer_rank_info
 	   sent from receiver to sender. These writes are required to
 	   target a valid buffer on both sender and receiver, so this
 	   address tracks the empty buffer for each rank */
-	uint64_t write_ack_buff_addr;
+	uint64_t write_ack_buff_addr_offset;
 	uint64_t write_ack_buff_mr_key[MAX_NUM_RAILS];
 
 	/* Flag, stored at initiator, indicating the given sequence number (mod
@@ -73,8 +73,19 @@ struct nccl_ofi_gin_peer_rank_info
 
 struct gin_remote_mr
 {
+	/* Virtual address of memory region */
 	uintptr_t address;
+
+	/* Offset for RMA operations. For virt_addr_mr providers, this is equal
+	   to address. For non-virt_addr_mr providers, this is zero.
+
+	   Note: we need both of these, because when address_offset is zero, the
+	   actual virtual address is still needed for MR lookup in the signal
+	   delivery path. */
+	uintptr_t address_offset;
+
 	int num_rails;
+
 	uint64_t mr_key[MAX_NUM_RAILS];
 };
 

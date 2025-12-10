@@ -227,6 +227,22 @@ public:
 	size_t alloc_comm_id() { return comm_id_pool.allocate_id(); }
 
 	void *get_write_ack_buffer_addr() { return write_ack_buffer.addr; }
+
+	/**
+	 * Get write ack buffer offset for RMA operations.
+	 *
+	 * For non-virt_addr_mr providers, this returns zero.
+	 */
+	uint64_t get_write_ack_buffer_addr_offset()
+	{
+		if (virt_addr_mr) {
+			void *addr = get_write_ack_buffer_addr();
+			return reinterpret_cast<uint64_t>(addr);
+		} else {
+			return 0;
+		}
+	}
+
 	nccl_ofi_gin_mr_handle_t *get_write_ack_buffer_mr_handle() { return write_ack_buffer.mr_handle; }
 
 	template<typename T, typename... U> T* get_req_from_pool(U&&... args)

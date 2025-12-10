@@ -19,12 +19,30 @@
  * This same communicator is passed to connect() API to create a GIN collective
  * communicator.
  */
-struct nccl_ofi_gin_listen_comm
+class nccl_ofi_gin_listen_comm
 {
+private:
 	int dev;
-	nccl_net_ofi_domain_t *domain;
+	nccl_net_ofi_domain_t *domain_ptr;
 	nccl_net_ofi_ep_t *ep;
 	nccl_net_ofi_listen_comm_t *l_comm;
+
+public:
+	nccl_ofi_gin_listen_comm(int dev_arg, nccl_net_ofi_domain_t *domain_arg,
+				 nccl_net_ofi_ep_t *ep_arg, nccl_net_ofi_listen_comm_t *l_comm_arg)
+		: dev(dev_arg), domain_ptr(domain_arg), ep(ep_arg), l_comm(l_comm_arg)
+	{ }
+
+	~nccl_ofi_gin_listen_comm()
+	{
+		int ret = l_comm->close(l_comm);
+		if (ret != 0) {
+			NCCL_OFI_WARN("GIN: Unable to close net listen comm: %d", ret);
+		}
+	}
+
+	int connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[],
+		    int nranks, int rank, nccl_ofi_gin_comm** gin_comm_out);
 };
 
 /**
@@ -193,19 +211,6 @@ public:
 };
 
 /** TODO: these should eventually be methods of the corresponding classes */
-
-/**
- * Establishes a GIN communicator.
- *
- * @param gin_ctx: context previous established during init call
- * @param handles: handles from calls to listen for each rank
- * @param nranks, rank: total ranks and caller's rank
- * @param gin_l_comm: communicator returned from listen call
- * @param gin_comm_out: communicator to be returned to caller
- */
-int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[],
-		int nranks, int rank, nccl_ofi_gin_listen_comm* gin_l_comm,
-		nccl_ofi_gin_comm** gin_comm_out);
 
 /**
  * Performs a ring-based allgather on all ranks of the communicator

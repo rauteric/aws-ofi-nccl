@@ -89,18 +89,15 @@ static inline void set_rail_address(nccl_ofi_gin_ep_rail_t &rail, nccl_ofi_addr 
 }
 
 
-int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[],
-		int nranks, int rank, nccl_ofi_gin_listen_comm* gin_l_comm,
-		nccl_ofi_gin_comm** gin_comm_out)
+int nccl_ofi_gin_listen_comm::connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[],
+				      int nranks, int rank, nccl_ofi_gin_comm** gin_comm_out)
 {
 	int ret = 0;
-	nccl_net_ofi_ep_t *ep = gin_l_comm->ep;
 
 	NCCL_OFI_INFO(NCCL_NET, "gin: connect() nranks %d rank %d", nranks, rank);
 
 	assert(nranks > 0);
 
-	nccl_net_ofi_listen_comm_t *l_comm = gin_l_comm->l_comm;
 	nccl_net_ofi_send_comm_t *s_comm = nullptr;
 	nccl_net_ofi_recv_comm_t *r_comm = nullptr;
 
@@ -122,7 +119,7 @@ int gin_connect(nccl_ofi_gin_ctx* gin_ctx, nccl_net_ofi_conn_handle_t* handles[]
 		}
 	}
 
-	auto &domain = *(gin_l_comm->domain);
+	auto &domain = *(this->domain_ptr);
 
 	/* Create a GIN resources object if it does not exist */
 	auto *resources = domain.get_gin_resources();

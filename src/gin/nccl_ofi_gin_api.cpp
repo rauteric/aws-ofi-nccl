@@ -114,12 +114,7 @@ static ncclResult_t nccl_ofi_gin_listen(void* ctx, int dev, void* handle, void**
 		return nccl_net_ofi_retval_translate(ret);
 	}
 
-	*listenComm = new nccl_ofi_gin_listen_comm {
-		.dev = dev,
-		.domain = domain,
-		.ep = ep,
-		.l_comm = l_comm
-	};
+	*listenComm = new nccl_ofi_gin_listen_comm(dev, domain, ep, l_comm);
 
 	return ncclSuccess;
 }
@@ -133,9 +128,9 @@ static ncclResult_t nccl_ofi_gin_connect(void* ctx, void* handles[], int nranks,
 	auto *gin_handles = reinterpret_cast<nccl_net_ofi_conn_handle_t **>(handles);
 
 	auto *gin_l_comm = static_cast<nccl_ofi_gin_listen_comm *>(listenComm);
-	int ret = gin_connect(gin_ctx, gin_handles,
-			      nranks, rank, gin_l_comm,
-			      reinterpret_cast<nccl_ofi_gin_comm **>(collComm));
+	int ret = gin_l_comm->connect(gin_ctx, gin_handles,
+				      nranks, rank,
+				      reinterpret_cast<nccl_ofi_gin_comm **>(collComm));
 
 	return nccl_net_ofi_retval_translate(ret);
 }
@@ -216,12 +211,10 @@ static ncclResult_t nccl_ofi_gin_closeColl(void* collComm)
 static ncclResult_t nccl_ofi_gin_closeListen(void* listenComm)
 {
 	auto *gin_listen_comm = static_cast<nccl_ofi_gin_listen_comm *>(listenComm);
-	nccl_net_ofi_listen_comm_t *l_comm = gin_listen_comm->l_comm;
 
 	delete gin_listen_comm;
-	int ret = l_comm->close(l_comm);
 
-	return nccl_net_ofi_retval_translate(ret);
+	return ncclSuccess;
 }
 
 

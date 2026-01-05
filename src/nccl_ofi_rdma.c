@@ -91,6 +91,8 @@
 #define GET_RDMA_WRITE_IMM_DATA(comm_id, seq, nseg) \
 	((seq) | ((comm_id) << NCCL_OFI_RDMA_SEQ_BITS) | ((nseg) << (NCCL_OFI_RDMA_SEQ_BITS + NCCL_OFI_RDMA_COMM_ID_BITS)))
 
+#define REQ_TIMEOUT_DIAGNOSTIC_SECONDS 210 /* 3m 30s */
+
 /** Global variables **/
 
 /* List of comms undergoing deferred cleanup */
@@ -2716,6 +2718,28 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	} else if (OFI_UNLIKELY(req->state == NCCL_OFI_RDMA_REQ_ERROR)) {
 		ret = -EINVAL;
 		goto exit;
+	} else {
+		if (!req->req_timeout_printed) {
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long elapsed_seconds = now.tv_sec - req->req_start.tv_sec;
+			if (elapsed_seconds > REQ_TIMEOUT_DIAGNOSTIC_SECONDS) {
+				NCCL_OFI_WARN("request incomplete for more than %d seconds", REQ_TIMEOUT_DIAGNOSTIC_SECONDS);
+				if (req->type == NCCL_OFI_RDMA_SEND) {
+					rdma_req_send_data_t *send_data = get_send_data(req);
+					NCCL_OFI_WARN("SEND -- eager send: %d; xferred_rail_id: %lu; send ncompls: %d",
+						      send_data->eager, send_data->xferred_rail_id, req->ncompls);
+				} else if (req->type == NCCL_OFI_RDMA_RECV) {
+					rdma_req_recv_data_t *recv_data = get_recv_data(req);
+					NCCL_OFI_WARN("RECV -- eager_copy_req: %p; send_ctrl ncompls: %d; recv_segms ncompls: %d; recv ncompls: %d",
+						      recv_data->eager_copy_req, recv_data->send_ctrl_req->ncompls,
+						      recv_data->recv_segms_req->ncompls, req->ncompls);
+				} else {
+					NCCL_OFI_WARN("Unknown request type");
+				}
+				req->req_timeout_printed = true;
+			}
+		}
 	}
 
  exit:
@@ -3171,6 +3195,9 @@ static inline nccl_net_ofi_rdma_req_t *allocate_req(nccl_ofi_freelist_t *fl)
 		NCCL_OFI_WARN("Unable to initialize mutex");
 		goto cleanup;
 	}
+
+	clock_gettime(CLOCK_MONOTONIC, &req->req_start);
+	req->req_timeout_printed = false;
 
 	return req;
 cleanup:

@@ -13,6 +13,8 @@ extern "C" {
 
 #include <rdma/fabric.h>
 
+#include <time.h>
+
 #include "nccl_ofi.h"
 #include "nccl_ofi_deque.h"
 #include "nccl_ofi_ep_addr_list.h"
@@ -418,6 +420,9 @@ typedef struct nccl_net_ofi_rdma_req {
 	 * request by its own. */
 	int (*free)(nccl_net_ofi_rdma_req_t *req,
 		    bool dec_inflight_reqs);
+
+	struct timespec req_start;
+	bool req_timeout_printed;
 
 } nccl_net_ofi_rdma_req_t;
 

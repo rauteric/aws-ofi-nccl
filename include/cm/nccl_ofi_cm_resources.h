@@ -31,13 +31,6 @@ public:
 	/* Memory registration handle */
 	class mr_handle_t {
 	public:
-		/* Default constructor */
-		mr_handle_t() = default;
-
-		/* Move constructor and assignment */
-		mr_handle_t(mr_handle_t&&) = default;
-		mr_handle_t& operator=(mr_handle_t&&) = default;
-
 		/* Delete copy operations since smart pointers are non-copyable */
 		mr_handle_t(const mr_handle_t&) = delete;
 		mr_handle_t& operator=(const mr_handle_t&) = delete;
@@ -58,10 +51,6 @@ public:
 	 */
 	endpoint(nccl_net_ofi_domain_t &domain, nccl_net_ofi_ep_t &ep);
 	
-	/* Move constructor and assignment */
-	endpoint(endpoint&&) = default;
-	endpoint& operator=(endpoint&&) = default;
-
 	/* Delete copy operations since smart pointers are non-copyable */
 	endpoint(const endpoint&) = delete;
 	endpoint& operator=(const endpoint&) = delete;

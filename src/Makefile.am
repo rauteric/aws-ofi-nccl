@@ -61,6 +61,7 @@ sources += \
 if HAVE_GDAKI
 sources += \
 	rdma/gin/nccl_ofi_gin_gdaki.cpp \
+	rdma/gin/nccl_ofi_gin_gdaki_dev_v1.cpp \
 	rdma/gin/nccl_ofi_gin_gdaki_resources.cpp
 endif
 endif

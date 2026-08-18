@@ -73,6 +73,7 @@ noinst_HEADERS = \
 if HAVE_GDAKI
 noinst_HEADERS += \
 	rdma/gin/nccl_ofi_gin_gdaki.h \
+	rdma/gin/nccl_ofi_gin_gdaki_dev_v1.h \
 	rdma/gin/nccl_ofi_gin_gdaki_dev.h \
 	rdma/gin/nccl_ofi_gin_gdaki_resources.h
 endif

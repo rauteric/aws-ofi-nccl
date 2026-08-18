@@ -58,8 +58,10 @@ __global__ void gin_put_gpu_kernel(nccl_ofi_gin_gdaki_dev_handle *dev,
 {
 	if (threadIdx.x != 0 || blockIdx.x != 0) return;
 
-	auto *qp = dev->data.qp;
-	auto *cq = dev->data.cq;
+	/* efa-dp-direct's device inlines take the submodule's current types, so
+	 * this kernel is valid only while those still match the v1 layout. */
+	auto *qp = reinterpret_cast<efa_cuda_qp *>(dev->data.qp);
+	auto *cq = reinterpret_cast<efa_cuda_cq *>(dev->data.cq);
 
 	efa_io_tx_wqe wr;
 	efa_cuda_init_rdma_write_wr(&wr, /*wr_id=*/0, dst_rkey, dst_addr);

@@ -211,6 +211,94 @@ jobs:
           cudart: ${{ matrix.cudart }}
           artifact-name: ${{ matrix.cc }}-${{ matrix.cc-variant }}-${{ matrix.sdk }}-config.log
 
+  # Guards the CUDA 11 build. Pin CUDA 11.8, the last CUDA 11 release. AL2023
+  # because its native gcc (11.5) is inside CUDA 11.8 nvcc's supported host-
+  # compiler range (<= 11), and its glibc (2.34) is old enough that CUDA 11.8's
+  # device math headers compile cleanly against it -- newer Ubuntus fail one
+  # constraint or the other.
+  #
+  # Both cudart modes run: nccl_ofi_cuda.cpp resolves driver entry points along
+  # genuinely different code paths for static (compile-time CUDART_VERSION) vs
+  # dynamic (runtime dlsym), and only the static path is visible to the
+  # compiler.
+  cuda11:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cudart:
+          - static
+          - dynamic
+
+    name: al2023/cuda11.8/cudart-${{ matrix.cudart }}
+    container: ghcr.io/${{ github.repository }}/aws-ofi-nccl-al2023-cuda11:cuda-efalattest
+    env:
+      # The GDAKI .cu tests link -lcuda, which only resolves where the NVIDIA
+      # driver is installed. CI has no driver, so point the linker at the
+      # toolkit's stub libcuda. Safe here because these binaries are only built,
+      # never run -- `make check` runs tests/unit, which does not link -lcuda.
+      LDFLAGS: -L/usr/local/cuda/lib64/stubs
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fix Git Configuration
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Call `autoreconf -ivf`
+        run: ./autogen.sh
+
+      - name: Run Configure
+        run: |
+          ./configure --with-mpi=/opt/amazon/openmpi \
+                      --with-libfabric=/opt/amazon/efa \
+                      --enable-tests=yes \
+                      --enable-werror=yes \
+                      --enable-picky-compiler=yes \
+                      --enable-platform-aws \
+                      --with-cuda=/usr/local/cuda \
+                      ${{ matrix.cudart == 'dynamic' && '--enable-cudart-dynamic' || '' }}
+
+      - name: Call `make`
+        run: make V=1
+
+      - name: Verify dynamic CUDART isolation
+        if: matrix.cudart == 'dynamic'
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          plugins=(src/.libs/libnccl*.so)
+          if [ ${#plugins[@]} -eq 0 ]; then
+              echo "No core plugin shared libraries were built" >&2
+              exit 1
+          fi
+
+          for plugin in "${plugins[@]}"; do
+              echo "Checking ${plugin}"
+
+              if readelf -d "${plugin}" | grep -Eq 'NEEDED.*\[libcudart\.so'; then
+                  echo "${plugin} has a direct CUDART dependency" >&2
+                  readelf -d "${plugin}" >&2
+                  exit 1
+              fi
+          done
+
+      - name: Call `make check`
+        run: make check V=1 || (cat tests/unit/test-suite.log && exit 1)
+
+      - name: Call `make install`
+        run: make install V=1
+
+      - name: Call `make distcheck`
+        run: make distcheck V=1
+
+      - name: Upload config.log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda11-cudart-${{ matrix.cudart }}-config.log
+          path: config.log
+          if-no-files-found: ignore
+
   Ubuntu2404:
     runs-on: ubuntu-24.04
     strategy:
